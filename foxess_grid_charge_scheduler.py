@@ -62,11 +62,59 @@ FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 
 G13S_WEEKEND_MIDDAY = os.getenv("FOXESS_G13S_WEEKEND_MIDDAY", "false").strip().lower() == "true"
 
+# ── SOC charge targets ────────────────────────────────────────────────────────
+# Target SOC% the battery should reach before each peak block.
+# Calculated for 9.4 kWh battery, ~2000W peak draw, 10% discharge floor.
+#
+# Window 1 = morning top-up (pre 07:00 peak)
+# Window 2 = pre-evening charge (pre 17:00/15:00 peak)
+#
+# FOXESS_CLOUD_BONUS adds extra % when cloud cover is high (low solar expected)
+#
+TARGET_SUMMER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_MORNING", "50"))
+TARGET_SUMMER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_EVENING", "55"))
+TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "30"))
+TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "40"))
+TARGET_WINTER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_MORNING", "65"))
+TARGET_WINTER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_EVENING", "95"))
+TARGET_WINTER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_MORNING", "65"))
+TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVENING", "95"))
+CLOUD_BONUS                   = int(os.getenv("FOXESS_CLOUD_BONUS", "20"))
+
 
 def is_winter(date: datetime.date) -> bool:
     """Winter = 1 Oct to 31 Mar"""
     m = date.month
     return m >= 10 or m <= 3
+
+
+def soc_targets(date: datetime.date, low_solar: bool):
+    """Return (morning_target, evening_target) SOC% for the given date.
+
+    Targets represent the minimum SOC needed to cover the next peak block
+    without drawing from the grid. Cloud bonus is added when solar is poor.
+    Capped at 95% to avoid stressing the battery.
+    """
+    winter     = is_winter(date)
+    is_weekday = date.weekday() < 5
+    bonus      = CLOUD_BONUS if low_solar else 0
+
+    if winter:
+        if is_weekday:
+            morning = TARGET_WINTER_WEEKDAY_MORNING + bonus
+            evening = TARGET_WINTER_WEEKDAY_EVENING + bonus
+        else:
+            morning = TARGET_WINTER_WEEKEND_MORNING + bonus
+            evening = TARGET_WINTER_WEEKEND_EVENING + bonus
+    else:
+        if is_weekday:
+            morning = TARGET_SUMMER_WEEKDAY_MORNING + bonus
+            evening = TARGET_SUMMER_WEEKDAY_EVENING + bonus
+        else:
+            morning = TARGET_SUMMER_WEEKEND_MORNING + bonus
+            evening = TARGET_SUMMER_WEEKEND_EVENING + bonus
+
+    return min(morning, 95), min(evening, 95)
 
 
 def g13s_windows(date: datetime.date):
@@ -248,22 +296,17 @@ def main():
     # because winter charging relies less on expected solar anyway
     low_solar = (cloud > 60) or (is_winter(today) and cloud > 80)
 
-    if low_solar:
-        min_soc_night = 35
-        min_soc_day   = 60   # allow midday grid support
-    else:
-        min_soc_night = 25
-        min_soc_day   = 35
+    morning_target, evening_target = soc_targets(today, low_solar)
 
-    enable1 = enable1 and (soc < min_soc_night)
-    enable2 = enable2 and (soc < min_soc_day)
+    enable1 = enable1 and (soc < morning_target)
+    enable2 = enable2 and (soc < evening_target)
 
     print(f"FoxESS Grid Charge Scheduler")
     print(f"  Device  : {sn}")
     print(f"  Today   : {today.strftime('%A, %d %b %Y')}")
     print(f"  Location: {FORECAST_LAT}, {FORECAST_LON}")
     print(f"  Mode    : {mode_label}")
-    print(f"  SOC     : {soc:.1f}%")
+    print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%{'  +cloud bonus' if low_solar else ''})")
     print(f"  Window 1: {start1}-{end1}  -> {'ENABLE' if enable1 else 'DISABLE'}")
     print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE'}")
     print()
