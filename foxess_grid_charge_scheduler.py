@@ -40,25 +40,31 @@ FORECAST_LAT = float(os.getenv("FOXESS_LAT", "50.2849"))
 FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 
 # ── Tauron G13s schedule (source: tauron.pl/dla-domu/prad/prad-z-usluga/tanie-godziny)
+# Prices from official PDF: tanie_godziny_jak_dziala_taryfa_g13s_12_2025.pdf
+# Total = sales price + distribution variable component (both brutto/kWh)
 #
 # WINTER (1 Oct – 31 Mar)
-#   Weekdays & weekends:
-#     🟡 CHEAP night:   21:00 – 07:00  (0.6150 zł/kWh)
-#     🟡 CHEAP midday:  10:00 – 15:00  (0.7196 zł/kWh weekdays / 0.4317 weekends)
-#     🔴 PEAK:          07:00 – 10:00  and  15:00 – 21:00  <- do NOT charge
+#   Weekdays:
+#     🟡 CHEAP night:   21:00 – 07:00  (0.6089 + 0.1346 = 0.7435 zł/kWh)
+#     🟡 CHEAP midday:  10:00 – 15:00  (0.6827 + 0.2459 = 0.9286 zł/kWh)
+#     🔴 PEAK:          07:00 – 10:00  and  15:00 – 21:00  (0.8723 + 0.4098 = 1.2821 zł/kWh) <- do NOT charge
+#   Weekends:
+#     🟡 CHEAP night:   21:00 – 07:00  (0.6089 + 0.1346 = 0.7435 zł/kWh)
+#     🟢 CHEAPEST mid:  10:00 – 15:00  (0.4121 + 0.1476 = 0.5597 zł/kWh)
+#     🟡 NEUTRAL:       07:00 – 10:00  and  15:00 – 21:00  (0.5258 + 0.2411 = 0.7669 zł/kWh) <- no true peak!
 #
 # SUMMER (1 Apr – 30 Sep)
 #   Weekdays:
-#     🟡 CHEAP night:   21:00 – 07:00  (0.6519 zł/kWh)
-#     🟢 CHEAPEST mid:  09:00 – 17:00  (0.5228 zł/kWh)  <- solar hours!
-#     🔴 PEAK:          07:00 – 09:00  and  17:00 – 21:00  <- do NOT charge
+#     🟡 CHEAP night:   21:00 – 07:00  (0.6212 + 0.1346 = 0.7558 zł/kWh)
+#     🟢 CHEAPEST mid:  09:00 – 17:00  (0.3383 + 0.1230 = 0.4613 zł/kWh)  <- solar hours!
+#     🔴 PEAK:          07:00 – 09:00  and  17:00 – 21:00  (0.8723 + 0.3496 = 1.2219 zł/kWh) <- do NOT charge
 #   Weekends:
-#     🟡 CHEAP night:   21:00 – 07:00  (0.6519 zł/kWh)
-#     🟢 CHEAPEST mid:  09:00 – 17:00  (0.2091 zł/kWh!)  <- very cheap
-#     🟡 MEDIUM:        07:00 – 09:00  and  17:00 – 21:00  (0.4474 zł/kWh)
+#     🟡 CHEAP night:   21:00 – 07:00  (0.6212 + 0.1346 = 0.7558 zł/kWh)
+#     🟢 CHEAPEST mid:  09:00 – 17:00  (0.1390 + 0.0492 = 0.1882 zł/kWh!)  <- very cheap
+#     🟡 NEUTRAL:       07:00 – 09:00  and  17:00 – 21:00  (0.3526 + 0.1446 = 0.4972 zł/kWh) <- no true peak!
 #
-# Strategy: always charge in night window; charge midday on weekdays (avoids peak);
-#           weekend midday optional (whole day is cheap anyway, configurable below)
+# Strategy: charge before peak on weekdays (peak is ~3x cheaper rate!);
+#           weekends have no true peak so targets are lower
 
 G13S_WEEKEND_MIDDAY = os.getenv("FOXESS_G13S_WEEKEND_MIDDAY", "false").strip().lower() == "true"
 
@@ -77,8 +83,8 @@ TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORN
 TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "40"))
 TARGET_WINTER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_MORNING", "65"))
 TARGET_WINTER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_EVENING", "95"))
-TARGET_WINTER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_MORNING", "65"))
-TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVENING", "95"))
+TARGET_WINTER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_MORNING", "35"))  # no true peak on winter weekends
+TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVENING", "50"))  # neutral rate only (0.5258 zł/kWh)
 CLOUD_BONUS                   = int(os.getenv("FOXESS_CLOUD_BONUS", "20"))
 
 
@@ -134,8 +140,13 @@ def g13s_windows(date: datetime.date):
         w2_start, w2_end = "15:30", "17:00"   # summer solar-aligned window
 
     # 🧠 Enable logic:
-    # Window 1 (night): enabled on weekdays (main scheduled top-up)
-    # Window 2 (midday): weekdays always enabled, weekends optional via config
+    # Window 1 (morning 06:30-07:00):
+    #   Weekdays: enabled — top up before 07:00 peak (both seasons)
+    #   Winter weekends: DISABLED — no true peak, neutral rate only (0.5258 zł/kWh)
+    #   Summer weekends: DISABLED — no true peak, neutral rate only (0.3526 zł/kWh)
+    # Window 2 (midday):
+    #   Weekdays: always enabled — charge before evening peak
+    #   Weekends: optional via G13S_WEEKEND_MIDDAY (no peak to worry about)
     enable1 = is_weekday
     enable2 = True if is_weekday else G13S_WEEKEND_MIDDAY
 
