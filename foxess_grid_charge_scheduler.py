@@ -22,9 +22,10 @@ DEVICE_SN    = os.getenv("FOXESS_SN", "")
 FORECAST_LAT = float(os.getenv("FOXESS_LAT", "50.2849"))  # default: Gliwice
 FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 
-# ── Settings and strategy ─────────────────────────────────────────────────────
+# ── Settings, strategy and notifier ──────────────────────────────────────────
 import config as cfg
 from strategies import get_strategy
+from notifier import notify_run, notify_error, notify_warning
 
 BASE_URL = "https://www.foxesscloud.com"
 
@@ -88,6 +89,7 @@ def get_battery_soc(sn):
             return None
         return float(datas[0].get("value", 0))
     except Exception as e:
+        notify_warning(f"Failed to read SOC: {e}")
         print(f"Warning: failed to read SOC ({e})")
     return None
 
@@ -110,6 +112,7 @@ def get_cloud_forecast():
         print(f"  Cloud   : {avg:.0f}%  (hours {current_hour}–{current_hour + len(cloud) - 1} local, {len(cloud)}h avg)")
         return avg
     except Exception as e:
+        notify_warning(f"Cloud forecast failed: {e}")
         print(f"Warning: cloud forecast failed ({e})")
         return 0
 
@@ -118,9 +121,9 @@ def get_cloud_forecast():
 def main():
     print(f"[RUN] {datetime.datetime.now().isoformat()}")
     if not API_KEY:
-        print("ERROR: FOXESS_API_KEY is not set.")
-        print("Get your key: foxesscloud.com -> Avatar -> Personal Centre -> API Management")
-        print("Then add to .env: FOXESS_API_KEY=your_key_here")
+        msg = "FOXESS_API_KEY is not set. Get your key at foxesscloud.com → Personal Centre → API Management"
+        print(f"ERROR: {msg}")
+        notify_error("Missing API key", Exception(msg))
         sys.exit(1)
 
     sn = DEVICE_SN
@@ -136,16 +139,15 @@ def main():
 
     cloud = get_cloud_forecast()
 
-    # low_solar: >60% cloud generally overcast; >80% threshold in winter since
-    # short days mean less solar contribution regardless
-    low_solar = (cloud > 60) or (today.month >= 10 or today.month <= 3) and (cloud > 80)
+    # low_solar: >60% cloud generally overcast; >80% threshold in winter
+    winter    = today.month >= 10 or today.month <= 3
+    low_solar = (cloud > 60) or (winter and cloud > 80)
 
     # ── Strategy selects windows and targets for today ────────────────────────
     strategy = get_strategy(today, cfg.TARIFF)
 
-    start1, end1 = strategy.window1
-    start2, end2 = strategy.window2
-
+    start1, end1   = strategy.window1
+    start2, end2   = strategy.window2
     morning_target = strategy.morning_target(low_solar)
     evening_target = strategy.evening_target(low_solar)
 
@@ -163,6 +165,8 @@ def main():
     print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE'}")
     print()
 
+    # ── Check current state and apply if needed ───────────────────────────────
+    changed = False
     try:
         cur      = get_charge_settings(sn)
         already1 = cur.get("enable1")
@@ -170,12 +174,29 @@ def main():
         print(f"  Current : window1={already1}  window2={already2}")
         if already1 == enable1 and already2 == enable2:
             print("  Already correct -- nothing to do.")
-            return
+        else:
+            set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
+            print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  window2={'ENABLED' if enable2 else 'DISABLED'}")
+            changed = True
     except Exception as e:
-        print(f"  Warning: could not read current state ({e}) -- applying anyway.")
+        notify_error("Failed to read/set charge windows", e)
+        print(f"  Error: {e}")
+        return
 
-    set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
-    print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  window2={'ENABLED' if enable2 else 'DISABLED'}")
+    # ── Discord notifications ─────────────────────────────────────────────────
+    notify_run(
+        sn=sn,
+        strategy_name=strategy.name,
+        soc=soc,
+        cloud=cloud,
+        low_solar=low_solar,
+        morning_target=morning_target,
+        evening_target=evening_target,
+        enable1=enable1, enable2=enable2,
+        start1=start1, end1=end1,
+        start2=start2, end2=end2,
+        changed=changed,
+    )
 
 
 if __name__ == "__main__":
