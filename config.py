@@ -54,23 +54,31 @@ G13S_WEEKEND_MIDDAY = os.getenv("FOXESS_G13S_WEEKEND_MIDDAY", "false").strip().l
 # Weekends have NO true peak in either season.
 
 # ── SOC charge targets (%) ────────────────────────────────────────────────────
-# Minimum SOC% the battery should reach before each peak block.
-# Calculated for 9.4 kWh battery, ~2000W peak draw, 10% discharge floor
-# (~8.46 kWh usable). Formula: target% = (peak_hours × net_draw_kW) / 0.0846
-#
-# Window 1 = morning top-up before 07:00
-# Window 2 = pre-evening charge before 17:00 (summer) / 15:00 (winter)
+# Window 1 (morning 06:30-07:00): minimum SOC before the morning peak block.
+# Window 2 (evening 15:30-17:00): minimum SOC before night — goal is to be
+#   near-full by 21:00 so the battery is ready for overnight draw. The current
+#   SOC at check time already reflects the day's solar production, so a high
+#   target here naturally enables charging only when solar hasn't done the job.
 #
 # Weekend targets are lower — no true peak, only neutral rates apply.
-# CLOUD_BONUS is added to all targets when cloud cover > 60% (low solar).
 TARGET_SUMMER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_MORNING", "50"))
-TARGET_SUMMER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_EVENING", "55"))
-TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "30"))
-TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "40"))
+TARGET_SUMMER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_EVENING", "85"))
+TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "15"))
+TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "85"))
 TARGET_WINTER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_MORNING", "65"))
 TARGET_WINTER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_EVENING", "95"))
 TARGET_WINTER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_MORNING", "35"))
-TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVENING", "50"))
+TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVENING", "85"))
 
-# Extra % added to all targets when cloud cover exceeds threshold (poor solar day)
-CLOUD_BONUS = int(os.getenv("FOXESS_CLOUD_BONUS", "20"))
+# Cloud bonus: extra % added to targets when cloud cover exceeds threshold.
+#
+# CLOUD_BONUS_MORNING: applied to window 1 targets. Cloud forecast predicts the
+#   coming day's solar — high cloud means solar won't recover the battery, so
+#   charge more from grid now. Higher bonus makes sense here.
+#
+# CLOUD_BONUS_EVENING: applied to window 2 targets. Current SOC at 15:30 already
+#   reflects what the day's solar has delivered — cloud bonus only adds a small
+#   nudge for borderline cases where SOC is just above the base target.
+#   Lower bonus here since SOC is a better signal than forecast at this point.
+CLOUD_BONUS_MORNING = int(os.getenv("FOXESS_CLOUD_BONUS_MORNING", "20"))
+CLOUD_BONUS_EVENING = int(os.getenv("FOXESS_CLOUD_BONUS_EVENING", "10"))

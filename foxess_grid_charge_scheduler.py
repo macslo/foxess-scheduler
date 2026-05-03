@@ -32,7 +32,7 @@ from config import (
     TARGET_SUMMER_WEEKEND_MORNING, TARGET_SUMMER_WEEKEND_EVENING,
     TARGET_WINTER_WEEKDAY_MORNING, TARGET_WINTER_WEEKDAY_EVENING,
     TARGET_WINTER_WEEKEND_MORNING, TARGET_WINTER_WEEKEND_EVENING,
-    CLOUD_BONUS,
+    CLOUD_BONUS_MORNING, CLOUD_BONUS_EVENING,
 )
 
 BASE_URL = "https://www.foxesscloud.com"
@@ -48,28 +48,31 @@ def is_winter(date: datetime.date) -> bool:
 def soc_targets(date: datetime.date, low_solar: bool):
     """Return (morning_target, evening_target) SOC% for the given date.
 
-    Targets represent the minimum SOC needed to cover the next peak block
-    without drawing from the grid. Cloud bonus is added when solar is poor.
-    Capped at 95% to avoid stressing the battery.
+    Morning bonus is higher — cloud forecast predicts the coming day's solar,
+    so we charge more from grid if it looks poor.
+    Evening bonus is lower — current SOC already reflects the day's solar,
+    so the base target is the primary signal; bonus just nudges borderline cases.
+    Both targets capped at 95%.
     """
     winter     = is_winter(date)
     is_weekday = date.weekday() < 5
-    bonus      = CLOUD_BONUS if low_solar else 0
+    m_bonus    = CLOUD_BONUS_MORNING if low_solar else 0
+    e_bonus    = CLOUD_BONUS_EVENING if low_solar else 0
 
     if winter:
         if is_weekday:
-            morning = TARGET_WINTER_WEEKDAY_MORNING + bonus
-            evening = TARGET_WINTER_WEEKDAY_EVENING + bonus
+            morning = TARGET_WINTER_WEEKDAY_MORNING + m_bonus
+            evening = TARGET_WINTER_WEEKDAY_EVENING + e_bonus
         else:
-            morning = TARGET_WINTER_WEEKEND_MORNING + bonus
-            evening = TARGET_WINTER_WEEKEND_EVENING + bonus
+            morning = TARGET_WINTER_WEEKEND_MORNING + m_bonus
+            evening = TARGET_WINTER_WEEKEND_EVENING + e_bonus
     else:
         if is_weekday:
-            morning = TARGET_SUMMER_WEEKDAY_MORNING + bonus
-            evening = TARGET_SUMMER_WEEKDAY_EVENING + bonus
+            morning = TARGET_SUMMER_WEEKDAY_MORNING + m_bonus
+            evening = TARGET_SUMMER_WEEKDAY_EVENING + e_bonus
         else:
-            morning = TARGET_SUMMER_WEEKEND_MORNING + bonus
-            evening = TARGET_SUMMER_WEEKEND_EVENING + bonus
+            morning = TARGET_SUMMER_WEEKEND_MORNING + m_bonus
+            evening = TARGET_SUMMER_WEEKEND_EVENING + e_bonus
 
     return min(morning, 95), min(evening, 95)
 
