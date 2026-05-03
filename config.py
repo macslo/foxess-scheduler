@@ -7,6 +7,14 @@ import os
 # Secrets (API key, device SN, location) belong in .env only.
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Active hours ──────────────────────────────────────────────────────────────
+# Script exits immediately outside this window — no API calls, no cloud checks.
+# Covers all charge windows (06:30 morning, 13:30/15:30 evening) plus daytime SOC
+# monitoring. No point running between 21:00 and 06:00 — battery is on cheap night
+# rate and nothing needs deciding.
+ACTIVE_HOUR_START = int(os.getenv("FOXESS_ACTIVE_HOUR_START", "6"))
+ACTIVE_HOUR_END   = int(os.getenv("FOXESS_ACTIVE_HOUR_END",   "21"))
+
 # ── Tariff mode ───────────────────────────────────────────────────────────────
 # g13s   -> automatic Tauron G13s seasonal schedule (default)
 # manual -> use your own windows defined below

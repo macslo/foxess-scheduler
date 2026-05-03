@@ -120,6 +120,13 @@ def get_cloud_forecast():
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"[RUN] {datetime.datetime.now().isoformat()}")
+
+    # ── Skip outside active hours ─────────────────────────────────────────────
+    now_h = datetime.datetime.now().hour
+    if not (cfg.ACTIVE_HOUR_START <= now_h < cfg.ACTIVE_HOUR_END):
+        print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
+        sys.exit(0)
+
     if not API_KEY:
         msg = "FOXESS_API_KEY is not set. Get your key at foxesscloud.com → Personal Centre → API Management"
         print(f"ERROR: {msg}")
