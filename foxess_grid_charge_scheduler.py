@@ -22,96 +22,11 @@ DEVICE_SN    = os.getenv("FOXESS_SN", "")
 FORECAST_LAT = float(os.getenv("FOXESS_LAT", "50.2849"))  # default: Gliwice
 FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 
-# ── Settings (from config.py, overridable via .env) ───────────────────────────
-from config import (
-    TARIFF,
-    CHARGE1_START, CHARGE1_END, CHARGE1_ENABLE,
-    CHARGE2_START, CHARGE2_END, CHARGE2_ENABLE,
-    G13S_WEEKEND_MIDDAY,
-    TARGET_SUMMER_WEEKDAY_MORNING, TARGET_SUMMER_WEEKDAY_EVENING,
-    TARGET_SUMMER_WEEKEND_MORNING, TARGET_SUMMER_WEEKEND_EVENING,
-    TARGET_WINTER_WEEKDAY_MORNING, TARGET_WINTER_WEEKDAY_EVENING,
-    TARGET_WINTER_WEEKEND_MORNING, TARGET_WINTER_WEEKEND_EVENING,
-    CLOUD_BONUS_MORNING, CLOUD_BONUS_EVENING,
-)
+# ── Settings and strategy ─────────────────────────────────────────────────────
+import config as cfg
+from strategies import get_strategy
 
 BASE_URL = "https://www.foxesscloud.com"
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def is_winter(date: datetime.date) -> bool:
-    """Winter = 1 Oct to 31 Mar"""
-    m = date.month
-    return m >= 10 or m <= 3
-
-
-def soc_targets(date: datetime.date, low_solar: bool):
-    """Return (morning_target, evening_target) SOC% for the given date.
-
-    Morning bonus is higher — cloud forecast predicts the coming day's solar,
-    so we charge more from grid if it looks poor.
-    Evening bonus is lower — current SOC already reflects the day's solar,
-    so the base target is the primary signal; bonus just nudges borderline cases.
-    Both targets capped at 95%.
-    """
-    winter     = is_winter(date)
-    is_weekday = date.weekday() < 5
-    m_bonus    = CLOUD_BONUS_MORNING if low_solar else 0
-    e_bonus    = CLOUD_BONUS_EVENING if low_solar else 0
-
-    if winter:
-        if is_weekday:
-            morning = TARGET_WINTER_WEEKDAY_MORNING + m_bonus
-            evening = TARGET_WINTER_WEEKDAY_EVENING + e_bonus
-        else:
-            morning = TARGET_WINTER_WEEKEND_MORNING + m_bonus
-            evening = TARGET_WINTER_WEEKEND_EVENING + e_bonus
-    else:
-        if is_weekday:
-            morning = TARGET_SUMMER_WEEKDAY_MORNING + m_bonus
-            evening = TARGET_SUMMER_WEEKDAY_EVENING + e_bonus
-        else:
-            morning = TARGET_SUMMER_WEEKEND_MORNING + m_bonus
-            evening = TARGET_SUMMER_WEEKEND_EVENING + e_bonus
-
-    return min(morning, 95), min(evening, 95)
-
-
-def g13s_windows(date: datetime.date):
-    winter     = is_winter(date)
-    is_weekday = date.weekday() < 5
-
-    # Window 1: morning top-up before 07:00 peak
-    w1_start, w1_end = "06:30", "07:00"
-
-    # Window 2: pre-evening charge
-    # Winter: before 15:00 peak  |  Summer: before 17:00 peak
-    if winter:
-        w2_start, w2_end = "13:30", "15:00"
-    else:
-        w2_start, w2_end = "15:30", "17:00"
-
-    # Enable logic:
-    # Window 1: weekdays only — weekends have no morning peak in either season
-    # Window 2: weekdays always; weekends optional (no peak, but cheap midday rate)
-    enable1 = is_weekday
-    enable2 = True if is_weekday else G13S_WEEKEND_MIDDAY
-
-    return enable1, w1_start, w1_end, enable2, w2_start, w2_end
-
-
-def manual_windows(date: datetime.date):
-    is_weekday = date.weekday() < 5
-    def resolve(policy):
-        p = policy.strip().lower()
-        if p == "always":   return True
-        if p == "never":    return False
-        if p == "weekdays": return is_weekday
-        if p == "weekends": return not is_weekday
-        print(f"  Warning: unknown policy '{p}', defaulting to never")
-        return False
-    return (resolve(CHARGE1_ENABLE), CHARGE1_START, CHARGE1_END,
-            resolve(CHARGE2_ENABLE), CHARGE2_START, CHARGE2_END)
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
@@ -164,11 +79,11 @@ def set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2):
 
 def get_battery_soc(sn):
     try:
-        data  = _post("/op/v0/device/real/query", {"sn": sn, "variables": ["SoC"]})
+        data   = _post("/op/v0/device/real/query", {"sn": sn, "variables": ["SoC"]})
         result = data.get("result", [])
         if not result:
             return None
-        datas = result[0].get("datas", [])
+        datas  = result[0].get("datas", [])
         if not datas:
             return None
         return float(datas[0].get("value", 0))
@@ -184,7 +99,7 @@ def get_cloud_forecast():
             "longitude":     FORECAST_LON,
             "hourly":        "cloud_cover",
             "forecast_days": 1,
-            "timezone":      "auto",   # local time index
+            "timezone":      "auto",
         }, timeout=10)
         r.raise_for_status()
         current_hour = datetime.datetime.now().hour
@@ -196,7 +111,7 @@ def get_cloud_forecast():
         return avg
     except Exception as e:
         print(f"Warning: cloud forecast failed ({e})")
-        return 0  # assume clear on failure
+        return 0
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -221,31 +136,29 @@ def main():
 
     cloud = get_cloud_forecast()
 
-    if TARIFF == "g13s":
-        enable1, start1, end1, enable2, start2, end2 = g13s_windows(today)
-        season     = "WINTER" if is_winter(today) else "SUMMER"
-        day_type   = "weekday" if today.weekday() < 5 else "weekend"
-        mode_label = f"Tauron G13s  season={season}  day={day_type}"
-    else:
-        enable1, start1, end1, enable2, start2, end2 = manual_windows(today)
-        day_type   = "weekday" if today.weekday() < 5 else "weekend"
-        mode_label = f"Manual  day={day_type}"
+    # low_solar: >60% cloud generally overcast; >80% threshold in winter since
+    # short days mean less solar contribution regardless
+    low_solar = (cloud > 60) or (today.month >= 10 or today.month <= 3) and (cloud > 80)
 
-    # low_solar: >60% cloud generally overcast; relax to >80% in winter since
-    # charging relies less on expected solar refill during short winter days
-    low_solar = (cloud > 60) or (is_winter(today) and cloud > 80)
+    # ── Strategy selects windows and targets for today ────────────────────────
+    strategy = get_strategy(today, cfg.TARIFF)
 
-    morning_target, evening_target = soc_targets(today, low_solar)
+    start1, end1 = strategy.window1
+    start2, end2 = strategy.window2
 
-    enable1 = enable1 and (soc < morning_target)
-    enable2 = enable2 and (soc < evening_target)
+    morning_target = strategy.morning_target(low_solar)
+    evening_target = strategy.evening_target(low_solar)
 
+    enable1 = strategy.enable1() and (soc < morning_target)
+    enable2 = strategy.enable2() and (soc < evening_target)
+
+    # ── Report ────────────────────────────────────────────────────────────────
     print(f"FoxESS Grid Charge Scheduler")
     print(f"  Device  : {sn}")
     print(f"  Today   : {today.strftime('%A, %d %b %Y')}")
     print(f"  Location: {FORECAST_LAT}, {FORECAST_LON}")
-    print(f"  Mode    : {mode_label}")
-    print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%{'  +cloud bonus' if low_solar else ''})")
+    print(f"  Strategy: {strategy.name}{'  +cloud bonus' if low_solar else ''}")
+    print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%)")
     print(f"  Window 1: {start1}-{end1}  -> {'ENABLE' if enable1 else 'DISABLE'}")
     print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE'}")
     print()
