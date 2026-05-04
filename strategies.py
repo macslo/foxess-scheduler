@@ -63,7 +63,8 @@ class ChargeStrategy(ABC):
 
 class SummerWeekday(ChargeStrategy):
     name     = "G13s SUMMER weekday"
-    window1  = ("06:30", "07:00")   # top up before 07:00 morning peak
+    window1  = ("06:50", "07:00")   # short top-up before 07:00 peak — 10kW charge rate
+                                    # covers worst case (10%→25% SOC) in ~8 min
     window2  = ("15:30", "17:00")   # top up before 17:00 evening peak
 
     def enable1(self): return True

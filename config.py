@@ -69,7 +69,7 @@ G13S_WEEKEND_MIDDAY = os.getenv("FOXESS_G13S_WEEKEND_MIDDAY", "false").strip().l
 #   target here naturally enables charging only when solar hasn't done the job.
 #
 # Weekend targets are lower — no true peak, only neutral rates apply.
-TARGET_SUMMER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_MORNING", "50"))
+TARGET_SUMMER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_MORNING", "15"))  # 1h peak × 1kW / 0.0846
 TARGET_SUMMER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_EVENING", "85"))
 TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "15"))
 TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "85"))
@@ -88,5 +88,5 @@ TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVEN
 #   reflects what the day's solar has delivered — cloud bonus only adds a small
 #   nudge for borderline cases where SOC is just above the base target.
 #   Lower bonus here since SOC is a better signal than forecast at this point.
-CLOUD_BONUS_MORNING = int(os.getenv("FOXESS_CLOUD_BONUS_MORNING", "20"))
+CLOUD_BONUS_MORNING = int(os.getenv("FOXESS_CLOUD_BONUS_MORNING", "10"))  # low usage in morning regardless of weather
 CLOUD_BONUS_EVENING = int(os.getenv("FOXESS_CLOUD_BONUS_EVENING", "10"))
