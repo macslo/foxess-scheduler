@@ -65,7 +65,7 @@ class SummerWeekday(ChargeStrategy):
     name     = "G13s SUMMER weekday"
     window1  = ("06:50", "07:00")   # short top-up before 07:00 peak — 10kW charge rate
                                     # covers worst case (10%→25% SOC) in ~8 min
-    window2  = ("15:30", "17:00")   # top up before 17:00 evening peak
+    window2  = ("16:20", "17:00")   # 40 min — worst case (10%→85% SOC) needs ~42 min at 10kW
 
     def enable1(self): return True
     def enable2(self): return True
@@ -76,8 +76,8 @@ class SummerWeekday(ChargeStrategy):
 
 class SummerWeekend(ChargeStrategy):
     name     = "G13s SUMMER weekend"
-    window1  = ("06:30", "07:00")   # optional — no peak, but dirt-cheap night rate ending
-    window2  = ("15:30", "17:00")   # optional — no peak, but goal is full battery by night
+    window1  = ("06:50", "07:00")   # 10 min — disabled by default (no peak on weekends)
+    window2  = ("16:20", "17:00")   # 40 min — disabled by default, goal is full battery by night
 
     def enable1(self): return False                       # no morning peak on weekends
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY    # off by default, configurable
@@ -101,7 +101,7 @@ class SummerWeekend(ChargeStrategy):
 class WinterWeekday(ChargeStrategy):
     name     = "G13s WINTER weekday"
     window1  = ("06:30", "07:00")   # top up before 07:00 morning peak (3h)
-    window2  = ("13:30", "15:00")   # top up before 15:00 evening peak (6h — worst block)
+    window2  = ("14:20", "15:00")   # 40 min — worst case (10%→95% SOC) needs ~42 min at 10kW
 
     def enable1(self): return True
     def enable2(self): return True
@@ -112,8 +112,8 @@ class WinterWeekday(ChargeStrategy):
 
 class WinterWeekend(ChargeStrategy):
     name     = "G13s WINTER weekend"
-    window1  = ("06:30", "07:00")   # no peak but heading into neutral rate
-    window2  = ("13:30", "15:00")   # no peak but goal is full battery by night
+    window1  = ("06:50", "07:00")   # 10 min — disabled by default (no peak on weekends)
+    window2  = ("14:20", "15:00")   # 40 min — disabled by default, goal is full battery by night
 
     def enable1(self): return False                       # no morning peak on weekends
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY    # off by default, configurable
