@@ -1,17 +1,20 @@
 # FoxESS Grid Charge Scheduler
 
-A Python script that automatically manages battery grid charging windows on a FoxESS inverter, optimised for the **Tauron G13s time-of-use tariff** (Poland). Runs as a scheduled task (e.g. cron on QNAP NAS) every 15 minutes.
+Automatically manages battery grid charging windows on a FoxESS inverter, optimised for the **Tauron G13s time-of-use tariff** (Poland). Runs via cron every 2 minutes but exits immediately unless near a charge window — no unnecessary API calls.
 
 ## How it works
 
-The script decides whether to **enable or disable** each of the two FoxESS force-charge windows based on:
+The script selects a **charging strategy** based on season and day type, then decides whether to enable or disable each FoxESS force-charge window based on:
 
-- **Current battery SOC** — no point charging if the battery is already full
-- **Season** (summer/winter) and **day type** (weekday/weekend) — different peak hours apply
-- **Cloud cover forecast** — if solar production will be poor, charge targets are raised to compensate
-- **Tariff-aware targets** — SOC thresholds are calculated to cover the next expensive peak block without drawing from the grid
+- **Current battery SOC** — charges only if battery is below the target for the upcoming peak block
+- **Season** (summer/winter) and **day type** (weekday/weekend) — G13s has different peak hours and no true peak on weekends
+- **Solar forecast** — uses shortwave radiation (W/m²) from Open-Meteo to detect poor solar days and raise targets accordingly
+- **Window proximity** — only runs fully when within a few minutes of a window start; all other runs exit instantly
+- **Window freeze** — once a window's end time passes, its state is no longer touched to avoid spurious changes
 
 ### Tauron G13s tariff schedule
+
+Prices from official Tauron PDF (12/2025). Total = sales + distribution variable component.
 
 **Winter (1 Oct – 31 Mar) — Weekdays**
 | Time | Rate | Sales | Distribution | **Total** |
@@ -41,21 +44,41 @@ The script decides whether to **enable or disable** each of the two FoxESS force
 | 09:00 – 17:00 | 🟢 Very cheap | 0.1390 | 0.0492 | **0.1882 zł/kWh** |
 | 07:00–09:00 and 17:00–21:00 | 🟡 Neutral — no true peak | 0.3526 | 0.1446 | **0.4972 zł/kWh** |
 
-> Prices from official Tauron PDF (12/2025). Peak hours on weekdays are roughly **3× more expensive** than cheap midday — well worth avoiding. Weekends have no true peak in either season. For current prices see the [Tauron G13s tariff page](https://www.tauron.pl/dla-domu/prad/prad-z-usluga/tanie-godziny).
+> Peak hours on weekdays are roughly **3× more expensive** than cheap midday. Weekends have **no true peak** in either season. For current prices see the [Tauron G13s tariff page](https://www.tauron.pl/dla-domu/prad/prad-z-usluga/tanie-godziny).
 
 ### Charge windows
 
-| Window | Time | Purpose |
-|--------|------|---------|
-| Window 1 | 06:30 – 07:00 | Morning top-up before peak |
-| Window 2 | 15:30 – 17:00 (summer) / 13:30 – 15:00 (winter) | Pre-evening top-up before peak |
+Sized for a ~10 kW grid charge rate. Window length covers worst-case SOC top-up with margin.
+
+| Strategy | Window 1 (morning) | Window 2 (evening) |
+|----------|-------------------|-------------------|
+| Summer weekday | 06:50 – 07:00 (10 min) | 16:20 – 17:00 (40 min) |
+| Summer weekend | 06:50 – 07:00 — disabled | 16:20 – 17:00 — disabled by default |
+| Winter weekday | 06:30 – 07:00 (30 min) | 14:20 – 15:00 (40 min) |
+| Winter weekend | 06:50 – 07:00 — disabled | 14:20 – 15:00 — disabled by default |
+
+---
+
+## File structure
+
+```
+foxess_grid_charge_scheduler.py  ← main orchestration + API calls
+strategies.py                    ← charging strategy per season/day type
+weather.py                       ← solar forecast (Open-Meteo shortwave radiation)
+notifier.py                      ← Discord webhook notifications
+config.py                        ← all tunable settings (committed to repo)
+.env                             ← secrets only — never committed
+.env.example                     ← template for .env
+update_and_run.sh                ← git pull + run (used by cron)
+test_scheduler.py                ← unit tests
+```
 
 ---
 
 ## Requirements
 
 - Python 3.7+
-- `requests` library (`pip install requests`)
+- `requests` library: `pip install requests`
 - FoxESS Cloud API key ([foxesscloud.com](https://www.foxesscloud.com) → Avatar → Personal Centre → API Management)
 
 ---
@@ -67,58 +90,60 @@ git clone https://github.com/macslo/foxess-scheduler.git
 cd foxess-scheduler
 pip install requests
 cp .env.example .env
-# edit .env with your API key and settings
+# edit .env with your API key and location
 ```
 
 ---
 
 ## Configuration
 
-All settings are controlled via a `.env` file in the same directory as the script. Create it based on the example below:
+### `.env` — secrets only, never committed
 
 ```ini
-# ── Required ──────────────────────────────────────────────────────────────────
+# Required
 FOXESS_API_KEY=your_api_key_here
 
-# ── Device (leave blank or set to "auto" to detect automatically) ─────────────
+# Device serial — leave as "auto" to detect automatically
 FOXESS_SN=auto
 
-# ── Tariff mode ───────────────────────────────────────────────────────────────
-# g13s   = automatic Tauron G13s seasonal schedule (default)
-# manual = use your own windows defined below
-FOXESS_TARIFF=g13s
-
-# ── Location for cloud cover forecast ────────────────────────────────────────
+# Your location for solar forecast
+# Default in config.py is Gliwice, Poland
 FOXESS_LAT=50.2849
 FOXESS_LON=18.6717
 
-# ── SOC charge targets (%) ───────────────────────────────────────────────────
-# Minimum SOC to reach before each peak block.
-# Defaults calculated for 9.4 kWh battery, ~2000W peak draw, 10% discharge floor.
-FOXESS_TARGET_SUMMER_WEEKDAY_MORNING=50
-FOXESS_TARGET_SUMMER_WEEKDAY_EVENING=55
-FOXESS_TARGET_SUMMER_WEEKEND_MORNING=30
-FOXESS_TARGET_SUMMER_WEEKEND_EVENING=40
-FOXESS_TARGET_WINTER_WEEKDAY_MORNING=65
-FOXESS_TARGET_WINTER_WEEKDAY_EVENING=95
-FOXESS_TARGET_WINTER_WEEKEND_MORNING=65
-FOXESS_TARGET_WINTER_WEEKEND_EVENING=95
-
-# Extra % added to targets when cloud cover > 60% (poor solar expected)
-FOXESS_CLOUD_BONUS=20
-
-# ── G13s options ──────────────────────────────────────────────────────────────
-# Enable midday charge window on weekends (whole day is cheap anyway)
-FOXESS_G13S_WEEKEND_MIDDAY=false
-
-# ── Manual windows (only used when FOXESS_TARIFF=manual) ─────────────────────
-FOXESS_CHARGE1_START=01:00
-FOXESS_CHARGE1_END=05:00
-FOXESS_CHARGE1_ENABLE=weekdays    # always / never / weekdays / weekends
-FOXESS_CHARGE2_START=13:00
-FOXESS_CHARGE2_END=15:00
-FOXESS_CHARGE2_ENABLE=never
+# Discord webhook for notifications (optional)
+# Discord channel → Edit → Integrations → Webhooks → New Webhook → Copy URL
+FOXESS_DISCORD_WEBHOOK=
 ```
+
+### `config.py` — all tunable settings, committed to repo
+
+Key settings (see `config.py` for full list with comments):
+
+```python
+# Active hours — script skips entirely outside this window
+ACTIVE_HOUR_START = 6
+ACTIVE_HOUR_END   = 21
+
+# Minutes before window start to activate (cron runs every 2 min)
+WINDOW_LEAD_MINUTES = 3
+
+# SOC targets — minimum % before each peak block
+TARGET_SUMMER_WEEKDAY_MORNING = 15   # 1h peak, low usage
+TARGET_SUMMER_WEEKDAY_EVENING = 85   # goal: near-full before night
+TARGET_SUMMER_WEEKEND_MORNING = 15
+TARGET_SUMMER_WEEKEND_EVENING = 85
+TARGET_WINTER_WEEKDAY_MORNING = 65   # 3h peak
+TARGET_WINTER_WEEKDAY_EVENING = 95   # 6h peak — worst block
+TARGET_WINTER_WEEKEND_MORNING = 35
+TARGET_WINTER_WEEKEND_EVENING = 85
+
+# Cloud bonus — added to targets when solar forecast is poor
+CLOUD_BONUS_MORNING = 10   # morning: low usage regardless of weather
+CLOUD_BONUS_EVENING = 10   # evening: current SOC already reflects the day's solar
+```
+
+All `config.py` values can be overridden in `.env` using the `FOXESS_` prefix.
 
 ---
 
@@ -127,67 +152,87 @@ FOXESS_CHARGE2_ENABLE=never
 ### Manual run
 
 ```bash
-/share/CACHEDEV1_DATA/.qpkg/Python3/python3/bin/python3 /path/to/foxess_grid_charge_scheduler.py
+python3 foxess_grid_charge_scheduler.py
 ```
 
-### Cron schedule (Task Scheduler or crontab)
-
-```
-# Every 15 minutes
-*/15 * * * * /share/CACHEDEV1_DATA/.qpkg/Python3/python3/bin/python3 /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/foxess_grid_charge_scheduler.py >> /share/CACHEDEV1_DATA/homes/madmin/foxess.log 2>&1
-
-# Extra trigger at 06:29 on weekdays to ensure full morning window is used
-29 6 * * 1-5 /share/CACHEDEV1_DATA/.qpkg/Python3/python3/bin/python3 /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/foxess_grid_charge_scheduler.py >> /share/CACHEDEV1_DATA/homes/madmin/foxess.log 2>&1
-```
-
-### Updating from GitHub
+### Force run (bypass window proximity check — still respects SOC logic, useful for testing)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/macslo/foxess-scheduler/refs/heads/main/foxess_grid_charge_scheduler.py \
-  -o /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/foxess_grid_charge_scheduler.py
+python3 foxess_grid_charge_scheduler.py --force
 ```
 
-Add as an alias in `~/.profile` for convenience:
-```bash
-alias update-foxess="curl -fsSL https://raw.githubusercontent.com/macslo/foxess-scheduler/refs/heads/main/foxess_grid_charge_scheduler.py -o /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/foxess_grid_charge_scheduler.py"
+### Cron setup
+
+The script self-manages when to run — cron just needs to fire every 2 minutes:
+
 ```
+*/2 * * * * update_and_run.sh
+```
+
+`update_and_run.sh` pulls the latest version from GitHub then runs the scheduler. Copy it to your QNAP and make it executable:
+
+---
+
+## Discord notifications
+
+The scheduler sends Discord embed messages on:
+- **Window state change** — when a window is enabled or disabled (yellow/green)
+- **Errors** — API failures, missing config (red)
+- **Daily summary** — first run each day with SOC, solar forecast and window states (blue)
+
+Set `FOXESS_DISCORD_WEBHOOK` in `.env` to activate. Leave blank to disable.
 
 ---
 
 ## Example output
 
 ```
-[RUN] 2026-05-02T15:34:53.697804
-  Cloud   : 12%  (hours 15–17 local, 3h avg)
+[RUN] 2026-05-04T06:51:23.456789
+  Solar   : 312 W/m²  (solar hours 09:00–11:00, 2h avg)  ☀️ good
 FoxESS Grid Charge Scheduler
   Device  : XYZ
-  Today   : Saturday, 02 May 2026
+  Today   : Monday, 04 May 2026
   Location: 50.2849, 18.6717
-  Mode    : Tauron G13s  season=SUMMER  day=weekend
-  SOC     : 99.0%  (morning target=30%  evening target=40%)
-  Window 1: 06:30-07:00  -> DISABLE
-  Window 2: 15:30-17:00  -> DISABLE
+  Strategy: G13s SUMMER weekday
+  SOC     : 22.0%  (morning target=15%  evening target=85%)
+  Window 1: 06:50-07:00  -> ENABLE
+  Window 2: 16:20-17:00  -> ENABLE
 
   Current : window1=False  window2=False
-  Already correct -- nothing to do.
+  Done: window1=ENABLED  window2=ENABLED
+```
+
+```
+[RUN] 2026-05-04T10:15:00.000000
+[SKIP] not near any window  (w1=06:50–07:00  w2=16:20–17:00  lead=3min)
 ```
 
 ---
 
-## Tuning the SOC targets
+## Tuning SOC targets
 
-| Scenario | Window 1 morning target | Window 2 evening target |
-|----------|------------------------|------------------------|
-| Summer weekday | 50% | 55% |
-| Summer weekend | 30% (no peak) | 40% (no peak) |
+Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, **10% discharge floor** (~8.46 kWh usable).
+
+| Scenario | Morning target | Evening target |
+|----------|---------------|---------------|
+| Summer weekday | 15% | 85% |
+| Summer weekend | 15% (no peak) | 85% |
 | Winter weekday | 65% | 95% |
-| Winter weekend | 35% (no peak) | 50% (no peak) |
+| Winter weekend | 35% (no peak) | 85% |
 
-> Weekend targets are lower because G13s has **no true peak on weekends** in either season — the off-cheap hours are neutral rate, not expensive.
+Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production, so a high target naturally enables charging only when solar hasn't done the job.
 
-Defaults are calculated for a **9.4 kWh battery** with **~2000W average peak draw** and a **10% discharge floor** (~8.46 kWh usable). To adapt to your setup: `target% = (peak_hours × net_draw_kW) / 0.0846`
+To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh × usable_fraction / 100)`
+/
+---
 
-The `FOXESS_CLOUD_BONUS` value is added to all targets when cloud cover exceeds 60% (80% in winter), compensating for reduced solar refill during cheap midday hours.
+## Running tests
+
+```bash
+python3 -m pytest test_scheduler.py -v
+# or without pytest:
+python3 test_scheduler.py
+```
 
 ---
 
