@@ -94,7 +94,13 @@ def get_battery_soc(sn):
     return None
 
 def get_cloud_forecast():
-    """Return average cloud cover (%) over the next 3 hours from now."""
+    """Return average cloud cover (%) relevant to the current decision.
+
+    Before 09:00: sample 09:00-14:00 — predicts whether solar will
+      recharge the battery during cheap midday hours after morning peak.
+    After 09:00: sample next 3 hours from now — reflects current conditions
+      for the evening window decision.
+    """
     try:
         r = requests.get("https://api.open-meteo.com/v1/forecast", params={
             "latitude":      FORECAST_LAT,
@@ -104,12 +110,22 @@ def get_cloud_forecast():
             "timezone":      "auto",
         }, timeout=10)
         r.raise_for_status()
+        hourly = r.json()["hourly"]["cloud_cover"]
+
         current_hour = datetime.datetime.now().hour
-        cloud = r.json()["hourly"]["cloud_cover"][current_hour:current_hour + 3]
+        if current_hour < 9:
+            # Morning run: look at peak solar hours to judge if sun will recharge battery
+            cloud = hourly[9:15]
+            label = "solar hours 09:00–14:00"
+        else:
+            # Daytime run: look at next 3 hours for current conditions
+            cloud = hourly[current_hour:current_hour + 3]
+            label = f"hours {current_hour}–{current_hour + len(cloud) - 1} local"
+
         if not cloud:
             return 0
         avg = sum(cloud) / len(cloud)
-        print(f"  Cloud   : {avg:.0f}%  (hours {current_hour}–{current_hour + len(cloud) - 1} local, {len(cloud)}h avg)")
+        print(f"  Cloud   : {avg:.0f}%  ({label}, {len(cloud)}h avg)")
         return avg
     except Exception as e:
         notify_warning(f"Cloud forecast failed: {e}")
