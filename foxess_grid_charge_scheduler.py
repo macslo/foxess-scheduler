@@ -169,6 +169,18 @@ def main():
     enable1 = strategy.enable1() and (soc < morning_target)
     enable2 = strategy.enable2() and (soc < evening_target)
 
+    # ── Freeze windows after their end times ─────────────────────────────────
+    # Once a window has closed, don't touch its state — it already did its job.
+    # Avoids spurious state changes and notifications.
+    def _is_closed(end_time: str) -> bool:
+        h, m = map(int, end_time.split(":"))
+        return now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+    if _is_closed(end1):
+        enable1 = None  # frozen
+    if _is_closed(end2):
+        enable2 = None  # frozen
+
     # ── Report ────────────────────────────────────────────────────────────────
     print(f"FoxESS Grid Charge Scheduler")
     print(f"  Device  : {sn}")
@@ -176,8 +188,8 @@ def main():
     print(f"  Location: {FORECAST_LAT}, {FORECAST_LON}")
     print(f"  Strategy: {strategy.name}{'  +cloud bonus' if low_solar else ''}")
     print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%)")
-    print(f"  Window 1: {start1}-{end1}  -> {'ENABLE' if enable1 else 'DISABLE'}")
-    print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE'}")
+    print(f"  Window 1: {start1}-{end1}  -> {'ENABLE' if enable1 else 'DISABLE' if enable1 is not None else 'FROZEN (window closed)'}")
+    print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE' if enable2 is not None else 'FROZEN (window closed)'}")
     print()
 
     # ── Check current state and apply if needed ───────────────────────────────
@@ -186,6 +198,13 @@ def main():
         cur      = get_charge_settings(sn)
         already1 = cur.get("enable1")
         already2 = cur.get("enable2")
+
+        # Frozen windows keep their current state — never trigger a change
+        if enable1 is None:
+            enable1 = already1
+        if enable2 is None:
+            enable2 = already2
+
         print(f"  Current : window1={already1}  window2={already2}")
         if already1 == enable1 and already2 == enable2:
             print("  Already correct -- nothing to do.")
