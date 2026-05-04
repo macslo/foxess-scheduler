@@ -26,6 +26,7 @@ FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 import config as cfg
 from strategies import get_strategy
 from notifier import notify_run, notify_error, notify_warning
+from weather import get_cloud_forecast, is_low_solar
 
 BASE_URL = "https://www.foxesscloud.com"
 
@@ -93,44 +94,7 @@ def get_battery_soc(sn):
         print(f"Warning: failed to read SOC ({e})")
     return None
 
-def get_cloud_forecast():
-    """Return average cloud cover (%) relevant to the current decision.
 
-    Before 09:00: sample 09:00-14:00 — predicts whether solar will
-      recharge the battery during cheap midday hours after morning peak.
-    After 09:00: sample next 3 hours from now — reflects current conditions
-      for the evening window decision.
-    """
-    try:
-        r = requests.get("https://api.open-meteo.com/v1/forecast", params={
-            "latitude":      FORECAST_LAT,
-            "longitude":     FORECAST_LON,
-            "hourly":        "cloud_cover",
-            "forecast_days": 1,
-            "timezone":      "auto",
-        }, timeout=10)
-        r.raise_for_status()
-        hourly = r.json()["hourly"]["cloud_cover"]
-
-        current_hour = datetime.datetime.now().hour
-        if current_hour < 9:
-            # Morning run: look at peak solar hours to judge if sun will recharge battery
-            cloud = hourly[9:15]
-            label = "solar hours 09:00–14:00"
-        else:
-            # Daytime run: look at next 3 hours for current conditions
-            cloud = hourly[current_hour:current_hour + 3]
-            label = f"hours {current_hour}–{current_hour + len(cloud) - 1} local"
-
-        if not cloud:
-            return 0
-        avg = sum(cloud) / len(cloud)
-        print(f"  Cloud   : {avg:.0f}%  ({label}, {len(cloud)}h avg)")
-        return avg
-    except Exception as e:
-        notify_warning(f"Cloud forecast failed: {e}")
-        print(f"Warning: cloud forecast failed ({e})")
-        return 0
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -160,11 +124,9 @@ def main():
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
         soc = 0
 
-    cloud = get_cloud_forecast()
-
-    # low_solar: >60% cloud generally overcast; >80% threshold in winter
+    cloud     = get_cloud_forecast(FORECAST_LAT, FORECAST_LON)
     winter    = today.month >= 10 or today.month <= 3
-    low_solar = (cloud > 60) or (winter and cloud > 80)
+    low_solar = is_low_solar(cloud, winter)
 
     # ── Strategy selects windows and targets for today ────────────────────────
     strategy = get_strategy(today, cfg.TARIFF)
