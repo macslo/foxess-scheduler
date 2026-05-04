@@ -26,7 +26,7 @@ FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 import config as cfg
 from strategies import get_strategy
 from notifier import notify_run, notify_error, notify_warning
-from weather import get_cloud_forecast, is_low_solar
+from weather import get_solar_forecast, is_low_solar
 
 BASE_URL = "https://www.foxesscloud.com"
 
@@ -124,9 +124,9 @@ def main():
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
         soc = 0
 
-    cloud     = get_cloud_forecast(FORECAST_LAT, FORECAST_LON)
+    radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
     winter    = today.month >= 10 or today.month <= 3
-    low_solar = is_low_solar(cloud, winter)
+    low_solar = is_low_solar(radiation, winter)
 
     # ── Strategy selects windows and targets for today ────────────────────────
     strategy = get_strategy(today, cfg.TARIFF)
@@ -173,7 +173,7 @@ def main():
         sn=sn,
         strategy_name=strategy.name,
         soc=soc,
-        cloud=cloud,
+        radiation=radiation,
         low_solar=low_solar,
         morning_target=morning_target,
         evening_target=evening_target,
