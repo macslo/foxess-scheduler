@@ -9,11 +9,14 @@ import os
 
 # ── Active hours ──────────────────────────────────────────────────────────────
 # Script exits immediately outside this window — no API calls, no cloud checks.
-# Covers all charge windows (06:30 morning, 13:30/15:30 evening) plus daytime SOC
-# monitoring. No point running between 21:00 and 06:00 — battery is on cheap night
-# rate and nothing needs deciding.
 ACTIVE_HOUR_START = int(os.getenv("FOXESS_ACTIVE_HOUR_START", "6"))
 ACTIVE_HOUR_END   = int(os.getenv("FOXESS_ACTIVE_HOUR_END",   "21"))
+
+# ── Window proximity ──────────────────────────────────────────────────────────
+# How many minutes before a window start the script should activate.
+# Cron runs every 2 minutes — lead of 3 min ensures at least one run fires
+# before each window opens, regardless of which window times are configured.
+WINDOW_LEAD_MINUTES = int(os.getenv("FOXESS_WINDOW_LEAD_MINUTES", "3"))
 
 # ── Tariff mode ───────────────────────────────────────────────────────────────
 # g13s   -> automatic Tauron G13s seasonal schedule (default)

@@ -94,17 +94,48 @@ def get_battery_soc(sn):
         print(f"Warning: failed to read SOC ({e})")
     return None
 
+def _minutes_until(now: datetime.datetime, window_start: str) -> int:
+    """Return minutes from now until window_start. Negative if already past."""
+    h, m = map(int, window_start.split(":"))
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    return int((target - now).total_seconds() / 60)
 
+
+def _near_window(now: datetime.datetime, strategy) -> bool:
+    """Return True if now is within WINDOW_LEAD_MINUTES before either window start,
+    or inside the window itself."""
+    lead = cfg.WINDOW_LEAD_MINUTES
+    for start, end in (strategy.window1, strategy.window2):
+        mins = _minutes_until(now, start)
+        h_end, m_end = map(int, end.split(":"))
+        end_dt = now.replace(hour=h_end, minute=m_end, second=0, microsecond=0)
+        inside = now <= end_dt
+        if -lead <= mins <= lead and inside or (0 >= mins and inside):
+            return True
+        if 0 <= mins <= lead:
+            return True
+    return False
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print(f"[RUN] {datetime.datetime.now().isoformat()}")
+    now   = datetime.datetime.now()
+    force = "--force" in sys.argv
+    print(f"[RUN] {now.isoformat()}{' [FORCED]' if force else ''}")
 
     # ── Skip outside active hours ─────────────────────────────────────────────
-    now_h = datetime.datetime.now().hour
-    if not (cfg.ACTIVE_HOUR_START <= now_h < cfg.ACTIVE_HOUR_END):
+    if not force and not (cfg.ACTIVE_HOUR_START <= now.hour < cfg.ACTIVE_HOUR_END):
         print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
+        sys.exit(0)
+
+    # ── Get strategy early so we can check window proximity ──────────────────
+    today    = now.date()
+    strategy = get_strategy(today, cfg.TARIFF)
+
+    if not force and not _near_window(now, strategy):
+        start1, end1 = strategy.window1
+        start2, end2 = strategy.window2
+        print(f"[SKIP] not near any window  (w1={start1}–{end1}  w2={start2}–{end2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
 
     if not API_KEY:
@@ -118,7 +149,7 @@ def main():
         print("FOXESS_SN not set -- auto-detecting...")
         sn = get_first_sn()
 
-    today = datetime.date.today()
+    today = now.date()
     soc   = get_battery_soc(sn)
     if soc is None:
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
@@ -128,8 +159,7 @@ def main():
     winter    = today.month >= 10 or today.month <= 3
     low_solar = is_low_solar(radiation, winter)
 
-    # ── Strategy selects windows and targets for today ────────────────────────
-    strategy = get_strategy(today, cfg.TARIFF)
+    # strategy already selected above for window proximity check
 
     start1, end1   = strategy.window1
     start2, end2   = strategy.window2
