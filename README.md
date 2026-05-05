@@ -223,7 +223,7 @@ Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, 
 Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production, so a high target naturally enables charging only when solar hasn't done the job.
 
 To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh × usable_fraction / 100)`
-/
+
 ---
 
 ## Running tests
