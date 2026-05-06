@@ -12,6 +12,7 @@ Thresholds for your ~6kWp system:
   < 150 W/m²  → poor solar, need grid backup
 """
 import datetime
+import time
 import requests
 from notifier import notify_warning
 
@@ -19,16 +20,17 @@ from notifier import notify_warning
 SOLAR_GOOD = 300   # above this → low_solar = False
 SOLAR_POOR = 150   # below this → low_solar = True (marginal between 150-300)
 
+
 def _fetch_with_retry(url, params, retries=3):
+    """GET request with exponential backoff on server errors."""
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10)
 
-            # success
             if r.status_code == 200:
                 return r
 
-            # retry on server errors (like 502/503/504)
+            # retry on server errors (502/503/504)
             if 500 <= r.status_code < 600:
                 print(f"[weather] HTTP {r.status_code}, retry {i+1}/{retries}")
                 time.sleep(2 ** i)
@@ -42,7 +44,7 @@ def _fetch_with_retry(url, params, retries=3):
             print(f"[weather] network error: {e}, retry {i+1}/{retries}")
             time.sleep(2 ** i)
 
-    return None
+    return None  # all retries exhausted
 
 
 def get_solar_forecast(lat: float, lon: float) -> float:
@@ -62,6 +64,10 @@ def get_solar_forecast(lat: float, lon: float) -> float:
             "forecast_days": 1,
             "timezone":      "auto",
         })
+
+        if r is None:
+            raise RuntimeError("All retries exhausted")
+
         r.raise_for_status()
         hourly = r.json()["hourly"]["shortwave_radiation"]
 
