@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH=/opt/bin:/opt/sbin:$PATH
 set -euo pipefail
 
 cd "$(dirname "$0")"
