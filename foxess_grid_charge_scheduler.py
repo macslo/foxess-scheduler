@@ -1,5 +1,6 @@
 import hashlib, time, datetime, os, sys, requests
 from pathlib import Path
+from datetime import timedelta
 
 # ── Load secrets from .env ────────────────────────────────────────────────────
 def load_dotenv(path=".env"):
@@ -176,9 +177,24 @@ def main():
         h, m = map(int, end_time.split(":"))
         return now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
 
-    if _is_closed(end1):
+    def _is_not_opened_yet(start_time: str) -> bool:
+        h, m = map(int, start_time.split(":"))
+        start_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+        lead = timedelta(minutes=cfg.WINDOW_LEAD_MINUTES)
+
+        return now < (start_dt - lead)
+
+    def window_status(enable, start, end):
+        if _is_closed(end):
+            return "FROZEN (window closed)"
+        if _is_not_opened_yet(start):
+            return "FROZEN (not opened yet)"
+        return "ENABLE" if enable else "DISABLE"
+
+    if _is_closed(end1) or _is_not_opened_yet(start1):
         enable1 = None  # frozen
-    if _is_closed(end2):
+    if _is_closed(end2) or _is_not_opened_yet(start2):
         enable2 = None  # frozen
 
     # ── Report ────────────────────────────────────────────────────────────────
@@ -188,8 +204,8 @@ def main():
     print(f"  Location: {FORECAST_LAT}, {FORECAST_LON}")
     print(f"  Strategy: {strategy.name}{'  +cloud bonus' if low_solar else ''}")
     print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%)")
-    print(f"  Window 1: {start1}-{end1}  -> {'ENABLE' if enable1 else 'DISABLE' if enable1 is not None else 'FROZEN (window closed)'}")
-    print(f"  Window 2: {start2}-{end2}  -> {'ENABLE' if enable2 else 'DISABLE' if enable2 is not None else 'FROZEN (window closed)'}")
+    print(f"  Window 1: {start1}-{end1}  -> {window_status(enable1, start1, end1)}")
+    print(f"  Window 2: {start2}-{end2}  -> {window_status(enable2, start2, end2)}")
     print()
 
     # ── Check current state and apply if needed ───────────────────────────────
