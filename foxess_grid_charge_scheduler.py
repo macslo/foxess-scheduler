@@ -150,7 +150,6 @@ def main():
         print("FOXESS_SN not set -- auto-detecting...")
         sn = get_first_sn()
 
-    today = now.date()
     soc   = get_battery_soc(sn)
     if soc is None:
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
