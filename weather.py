@@ -19,6 +19,31 @@ from notifier import notify_warning
 SOLAR_GOOD = 300   # above this → low_solar = False
 SOLAR_POOR = 150   # below this → low_solar = True (marginal between 150-300)
 
+def _fetch_with_retry(url, params, retries=3):
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=10)
+
+            # success
+            if r.status_code == 200:
+                return r
+
+            # retry on server errors (like 502/503/504)
+            if 500 <= r.status_code < 600:
+                print(f"[weather] HTTP {r.status_code}, retry {i+1}/{retries}")
+                time.sleep(2 ** i)
+                continue
+
+            # non-retryable (400 etc.)
+            print(f"[weather] HTTP {r.status_code} (not retrying)")
+            return r
+
+        except requests.RequestException as e:
+            print(f"[weather] network error: {e}, retry {i+1}/{retries}")
+            time.sleep(2 ** i)
+
+    return None
+
 
 def get_solar_forecast(lat: float, lon: float) -> float:
     """Return average shortwave radiation (W/m²) relevant to the current decision.
@@ -30,13 +55,13 @@ def get_solar_forecast(lat: float, lon: float) -> float:
     Returns 999 (assume good solar) on forecast failure to avoid unnecessary charging.
     """
     try:
-        r = requests.get("https://api.open-meteo.com/v1/forecast", params={
+        r = _fetch_with_retry("https://api.open-meteo.com/v1/forecast", params={
             "latitude":      lat,
             "longitude":     lon,
             "hourly":        "shortwave_radiation",
             "forecast_days": 1,
             "timezone":      "auto",
-        }, timeout=10)
+        })
         r.raise_for_status()
         hourly = r.json()["hourly"]["shortwave_radiation"]
 
