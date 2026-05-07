@@ -122,25 +122,43 @@ class TestStrategyEnableLogic(unittest.TestCase):
 # ── Strategy window times ─────────────────────────────────────────────────────
 class TestStrategyWindowTimes(unittest.TestCase):
 
-    def test_summer_weekday_windows(self):
+    def test_summer_weekday_windows_clear(self):
         s = SummerWeekday()
         self.assertEqual(s.window1, ("06:50", "07:00"))
-        self.assertEqual(s.window2, ("16:20", "17:00"))
+        self.assertEqual(s.get_window2(False), ("16:20", "17:00"))
+
+    def test_summer_weekday_windows_cloudy(self):
+        s = SummerWeekday()
+        self.assertEqual(s.get_window2(True), ("15:45", "17:00"))
 
     def test_summer_weekend_windows(self):
         s = SummerWeekend()
         self.assertEqual(s.window1, ("06:50", "07:00"))
-        self.assertEqual(s.window2, ("16:20", "17:00"))
+        self.assertEqual(s.get_window2(False), ("16:20", "17:00"))
+        self.assertEqual(s.get_window2(True), ("15:45", "17:00"))
 
-    def test_winter_weekday_windows(self):
+    def test_winter_weekday_windows_clear(self):
         s = WinterWeekday()
         self.assertEqual(s.window1, ("06:30", "07:00"))
-        self.assertEqual(s.window2, ("14:20", "15:00"))
+        self.assertEqual(s.get_window2(False), ("14:20", "15:00"))
+
+    def test_winter_weekday_windows_cloudy(self):
+        s = WinterWeekday()
+        self.assertEqual(s.get_window2(True), ("13:00", "15:00"))
 
     def test_winter_weekend_windows(self):
         s = WinterWeekend()
         self.assertEqual(s.window1, ("06:50", "07:00"))
-        self.assertEqual(s.window2, ("14:20", "15:00"))
+        self.assertEqual(s.get_window2(False), ("14:20", "15:00"))
+        self.assertEqual(s.get_window2(True), ("13:00", "15:00"))
+
+    def test_cloudy_window2_always_starts_earlier(self):
+        for StratClass in [SummerWeekday, SummerWeekend, WinterWeekday, WinterWeekend]:
+            s = StratClass()
+            clear_start   = s.get_window2(False)[0]
+            cloudy_start  = s.get_window2(True)[0]
+            self.assertLessEqual(cloudy_start, clear_start,
+                msg=f"{StratClass.__name__}: cloudy start {cloudy_start} should be <= clear start {clear_start}")
 
 
 # ── SOC targets ───────────────────────────────────────────────────────────────
@@ -234,39 +252,46 @@ class TestNearWindow(unittest.TestCase):
     def _strategy_with_windows(self, w1_start, w1_end, w2_start, w2_end):
         """Create a minimal mock strategy with given window times."""
         class MockStrategy:
-            window1 = (w1_start, w1_end)
-            window2 = (w2_start, w2_end)
+            window1           = (w1_start, w1_end)
+            window2           = (w2_start, w2_end)
+            window2_low_solar = (w2_start, w2_end)
+            def get_window2(self, low_solar): return self.window2
         return MockStrategy()
 
     def test_exactly_at_window1_start(self):
         s = self._strategy_with_windows("10:00", "10:30", "15:00", "15:40")
-        self.assertTrue(_near_window(dt(10, 0), s))
+        self.assertTrue(_near_window(dt(10, 0), s, False))
 
     def test_inside_window1(self):
         s = self._strategy_with_windows("10:00", "10:30", "15:00", "15:40")
-        self.assertTrue(_near_window(dt(10, 15), s))
+        self.assertTrue(_near_window(dt(10, 15), s, False))
 
     def test_lead_time_before_window1(self):
         s = self._strategy_with_windows("10:00", "10:30", "15:00", "15:40")
-        # 2 min before start, lead=3 → should trigger
-        self.assertTrue(_near_window(dt(9, 58), s))
+        self.assertTrue(_near_window(dt(9, 58), s, False))
 
     def test_too_early_for_window1(self):
         s = self._strategy_with_windows("10:00", "10:30", "15:00", "15:40")
-        # 10 min before start, lead=3 → should not trigger
-        self.assertFalse(_near_window(dt(9, 50), s))
+        self.assertFalse(_near_window(dt(9, 50), s, False))
 
     def test_after_both_windows(self):
         s = self._strategy_with_windows("06:50", "07:00", "16:20", "17:00")
-        self.assertFalse(_near_window(dt(20, 0), s))
+        self.assertFalse(_near_window(dt(20, 0), s, False))
 
     def test_near_window2(self):
         s = self._strategy_with_windows("06:50", "07:00", "16:20", "17:00")
-        self.assertTrue(_near_window(dt(16, 20), s))
+        self.assertTrue(_near_window(dt(16, 20), s, False))
 
     def test_inside_window2(self):
         s = self._strategy_with_windows("06:50", "07:00", "16:20", "17:00")
-        self.assertTrue(_near_window(dt(16, 40), s))
+        self.assertTrue(_near_window(dt(16, 40), s, False))
+
+    def test_cloudy_earlier_window2_triggers_earlier(self):
+        """On a cloudy day the earlier window2 start should trigger proximity sooner."""
+        s = SummerWeekday()
+        # 15:46 — near cloudy start (15:45) but not near clear start (16:20)
+        self.assertTrue(_near_window(dt(15, 46), s, True))
+        self.assertFalse(_near_window(dt(15, 46), s, False))
 
 
 # ── Minutes until ─────────────────────────────────────────────────────────────

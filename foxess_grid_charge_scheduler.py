@@ -1,6 +1,5 @@
 import hashlib, time, datetime, os, sys, requests
 from pathlib import Path
-from datetime import timedelta
 
 # ── Load secrets from .env ────────────────────────────────────────────────────
 def load_dotenv(path=".env"):
@@ -102,18 +101,18 @@ def _minutes_until(now: datetime.datetime, window_start: str) -> int:
     return int((target - now).total_seconds() / 60)
 
 
-def _near_window(now: datetime.datetime, strategy) -> bool:
+def _near_window(now: datetime.datetime, strategy, low_solar: bool) -> bool:
     """Return True if now is within WINDOW_LEAD_MINUTES before either window start,
     or inside the window itself."""
     lead = cfg.WINDOW_LEAD_MINUTES
-    for start, end in (strategy.window1, strategy.window2):
-        mins = _minutes_until(now, start)
-        h_end, m_end = map(int, end.split(":"))
-        end_dt = now.replace(hour=h_end, minute=m_end, second=0, microsecond=0)
+    for start, end in (strategy.window1, strategy.get_window2(low_solar)):
+        mins   = _minutes_until(now, start)
+        h, m   = map(int, end.split(":"))
+        end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
         inside = now <= end_dt
-        if -lead <= mins <= lead and inside or (0 >= mins and inside):
-            return True
         if 0 <= mins <= lead:
+            return True
+        if mins <= 0 and inside:
             return True
     return False
 
@@ -129,14 +128,20 @@ def main():
         print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
         sys.exit(0)
 
-    # ── Get strategy early so we can check window proximity ──────────────────
+    # ── Get strategy and solar forecast early — both needed for proximity check ─
     today    = now.date()
     strategy = get_strategy(today, cfg.TARIFF)
+    winter   = today.month >= 10 or today.month <= 3
 
-    if not force and not _near_window(now, strategy):
+    # Solar forecast must happen before proximity check because window2 start
+    # time depends on low_solar (cloudy = earlier start)
+    radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
+    low_solar = is_low_solar(radiation, winter)
+
+    if not force and not _near_window(now, strategy, low_solar):
         start1, end1 = strategy.window1
-        start2, end2 = strategy.window2
-        print(f"[SKIP] not near any window  (w1={start1}–{end1}  w2={start2}–{end2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+        start2, end2 = strategy.get_window2(low_solar)
+        print(f"[SKIP] not near any window  (w1={start1}–{end1}  w2={start2}–{end2}{'  ☁️' if low_solar else '  ☀️'}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
 
     if not API_KEY:
@@ -150,51 +155,41 @@ def main():
         print("FOXESS_SN not set -- auto-detecting...")
         sn = get_first_sn()
 
-    soc   = get_battery_soc(sn)
+    soc = get_battery_soc(sn)
     if soc is None:
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
         soc = 0
 
-    radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
-    winter    = today.month >= 10 or today.month <= 3
-    low_solar = is_low_solar(radiation, winter)
-
-    # strategy already selected above for window proximity check
-
     start1, end1   = strategy.window1
-    start2, end2   = strategy.window2
+    start2, end2   = strategy.get_window2(low_solar)
     morning_target = strategy.morning_target(low_solar)
     evening_target = strategy.evening_target(low_solar)
 
     enable1 = strategy.enable1() and (soc < morning_target)
     enable2 = strategy.enable2() and (soc < evening_target)
 
-    # ── Freeze windows after their end times ─────────────────────────────────
-    # Once a window has closed, don't touch its state — it already did its job.
-    # Avoids spurious state changes and notifications.
+    # ── Freeze windows outside their active period ────────────────────────────
+    # A window should only be touched when we're near it — not hours before it
+    # opens or after it closes. Outside that period, leave the current state alone.
     def _is_closed(end_time: str) -> bool:
         h, m = map(int, end_time.split(":"))
         return now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
 
-    def _is_not_opened_yet(start_time: str) -> bool:
-        h, m = map(int, start_time.split(":"))
-        start_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-
-        lead = timedelta(minutes=cfg.WINDOW_LEAD_MINUTES)
-
-        return now < (start_dt - lead)
-
+    def _is_not_yet_open(start_time: str) -> bool:
+        """True if window start is more than WINDOW_LEAD_MINUTES away."""
+        return _minutes_until(now, start_time) > cfg.WINDOW_LEAD_MINUTES
+    
     def window_status(enable, start, end):
         if _is_closed(end):
             return "FROZEN (window closed)"
-        if _is_not_opened_yet(start):
+        if _is_not_yet_open(start):
             return "FROZEN (not opened yet)"
         return "ENABLE" if enable else "DISABLE"
 
-    if _is_closed(end1) or _is_not_opened_yet(start1):
-        enable1 = None  # frozen
-    if _is_closed(end2) or _is_not_opened_yet(start2):
-        enable2 = None  # frozen
+    if _is_closed(end1) or _is_not_yet_open(start1):
+        enable1 = None  # frozen — outside active period
+    if _is_closed(end2) or _is_not_yet_open(start2):
+        enable2 = None  # frozen — outside active period
 
     # ── Report ────────────────────────────────────────────────────────────────
     print(f"FoxESS Grid Charge Scheduler")

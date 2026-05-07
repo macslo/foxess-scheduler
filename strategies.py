@@ -18,11 +18,13 @@ class ChargeStrategy(ABC):
 
     name: str           # human-readable label shown in logs
 
-    # Window 1: morning top-up
+    # Window 1: morning top-up (fixed — short window, low usage)
     window1: tuple[str, str]
 
-    # Window 2: pre-evening top-up
-    window2: tuple[str, str]
+    # Window 2: pre-evening top-up (may vary by solar forecast)
+    # Use get_window2(low_solar) instead of window2 directly.
+    window2: tuple[str, str]           # clear day default
+    window2_low_solar: tuple[str, str] # cloudy day — starts earlier to allow more charge time
 
     @abstractmethod
     def enable1(self) -> bool:
@@ -39,6 +41,15 @@ class ChargeStrategy(ABC):
     @abstractmethod
     def evening_target(self, low_solar: bool) -> int:
         """SOC% threshold below which window 2 activates."""
+
+    def get_window2(self, low_solar: bool) -> tuple[str, str]:
+        """Return window 2 times based on solar forecast.
+
+        On cloudy days the battery charge rate to battery is ~5.63 kW (rest
+        covers house load). Worst case 10%→85% SOC needs ~75 min at 5.63 kW.
+        On clear days solar contributes during the window so 40 min is enough.
+        """
+        return self.window2_low_solar if low_solar else self.window2
 
     def _m(self, base: int, low_solar: bool) -> int:
         bonus = cfg.CLOUD_BONUS_MORNING if low_solar else 0
@@ -62,10 +73,11 @@ class ChargeStrategy(ABC):
 #   17:00–21:00  🟡 neutral (0.4972 zł/kWh)
 
 class SummerWeekday(ChargeStrategy):
-    name     = "G13s SUMMER weekday"
-    window1  = ("06:50", "07:00")   # short top-up before 07:00 peak — 10kW charge rate
-                                    # covers worst case (10%→25% SOC) in ~8 min
-    window2  = ("16:20", "17:00")   # 40 min — worst case (10%→85% SOC) needs ~42 min at 10kW
+    name              = "G13s SUMMER weekday"
+    window1           = ("06:50", "07:00")   # 10 min — covers worst case at ~10kW charge rate
+    window2           = ("16:20", "17:00")   # 40 min — clear day, solar contributes
+    window2_low_solar = ("15:45", "17:00")   # 75 min — cloudy, battery charge rate ~5.63kW
+                                             # worst case 10%→85% needs ~75 min
 
     def enable1(self): return True
     def enable2(self): return True
@@ -75,12 +87,13 @@ class SummerWeekday(ChargeStrategy):
 
 
 class SummerWeekend(ChargeStrategy):
-    name     = "G13s SUMMER weekend"
-    window1  = ("06:50", "07:00")   # 10 min — disabled by default (no peak on weekends)
-    window2  = ("16:20", "17:00")   # 40 min — disabled by default, goal is full battery by night
+    name              = "G13s SUMMER weekend"
+    window1           = ("06:50", "07:00")   # disabled by default (no peak on weekends)
+    window2           = ("16:20", "17:00")   # disabled by default
+    window2_low_solar = ("15:45", "17:00")   # earlier if cloudy and weekend midday enabled
 
-    def enable1(self): return False                       # no morning peak on weekends
-    def enable2(self): return cfg.G13S_WEEKEND_MIDDAY    # off by default, configurable
+    def enable1(self): return False
+    def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
     def morning_target(self, low_solar): return self._m(cfg.TARGET_SUMMER_WEEKEND_MORNING, low_solar)
     def evening_target(self, low_solar): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, low_solar)
@@ -99,9 +112,11 @@ class SummerWeekend(ChargeStrategy):
 #   15:00–21:00  🟡 neutral (0.7669 zł/kWh)
 
 class WinterWeekday(ChargeStrategy):
-    name     = "G13s WINTER weekday"
-    window1  = ("06:30", "07:00")   # top up before 07:00 morning peak (3h)
-    window2  = ("14:20", "15:00")   # 40 min — worst case (10%→95% SOC) needs ~42 min at 10kW
+    name              = "G13s WINTER weekday"
+    window1           = ("06:30", "07:00")   # 30 min — 3h morning peak, weaker solar
+    window2           = ("14:20", "15:00")   # 40 min — clear day
+    window2_low_solar = ("13:00", "15:00")   # 120 min — cloudy winter, worst case 10%→95%
+                                             # needs ~75 min at 5.63kW, extra margin for cold
 
     def enable1(self): return True
     def enable2(self): return True
@@ -111,12 +126,13 @@ class WinterWeekday(ChargeStrategy):
 
 
 class WinterWeekend(ChargeStrategy):
-    name     = "G13s WINTER weekend"
-    window1  = ("06:50", "07:00")   # 10 min — disabled by default (no peak on weekends)
-    window2  = ("14:20", "15:00")   # 40 min — disabled by default, goal is full battery by night
+    name              = "G13s WINTER weekend"
+    window1           = ("06:50", "07:00")   # disabled by default (no peak on weekends)
+    window2           = ("14:20", "15:00")   # disabled by default
+    window2_low_solar = ("13:00", "15:00")   # earlier if cloudy and weekend midday enabled
 
-    def enable1(self): return False                       # no morning peak on weekends
-    def enable2(self): return cfg.G13S_WEEKEND_MIDDAY    # off by default, configurable
+    def enable1(self): return False
+    def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
     def morning_target(self, low_solar): return self._m(cfg.TARGET_WINTER_WEEKEND_MORNING, low_solar)
     def evening_target(self, low_solar): return self._e(cfg.TARGET_WINTER_WEEKEND_EVENING, low_solar)
@@ -128,9 +144,10 @@ class ManualStrategy(ChargeStrategy):
     """User-defined windows from config. No SOC targets — windows follow policy only."""
 
     def __init__(self, is_weekday: bool):
-        self.name    = f"Manual ({'weekday' if is_weekday else 'weekend'})"
-        self.window1 = (cfg.CHARGE1_START, cfg.CHARGE1_END)
-        self.window2 = (cfg.CHARGE2_START, cfg.CHARGE2_END)
+        self.name              = f"Manual ({'weekday' if is_weekday else 'weekend'})"
+        self.window1           = (cfg.CHARGE1_START, cfg.CHARGE1_END)
+        self.window2           = (cfg.CHARGE2_START, cfg.CHARGE2_END)
+        self.window2_low_solar = (cfg.CHARGE2_START, cfg.CHARGE2_END)  # same for manual
         self._enable1 = self._resolve(cfg.CHARGE1_ENABLE, is_weekday)
         self._enable2 = self._resolve(cfg.CHARGE2_ENABLE, is_weekday)
 
