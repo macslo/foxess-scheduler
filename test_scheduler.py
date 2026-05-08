@@ -122,43 +122,55 @@ class TestStrategyEnableLogic(unittest.TestCase):
 # ── Strategy window times ─────────────────────────────────────────────────────
 class TestStrategyWindowTimes(unittest.TestCase):
 
-    def test_summer_weekday_windows_clear(self):
+    def test_summer_weekday_window1_clear(self):
         s = SummerWeekday()
-        self.assertEqual(s.window1, ("06:50", "07:00"))
+        self.assertEqual(s.get_window1(False), ("06:50", "07:00"))
+
+    def test_summer_weekday_window1_cloudy(self):
+        s = SummerWeekday()
+        self.assertEqual(s.get_window1(True), ("06:45", "07:00"))
+
+    def test_summer_weekday_window2_clear(self):
+        s = SummerWeekday()
         self.assertEqual(s.get_window2(False), ("16:20", "17:00"))
 
-    def test_summer_weekday_windows_cloudy(self):
+    def test_summer_weekday_window2_cloudy(self):
         s = SummerWeekday()
         self.assertEqual(s.get_window2(True), ("15:45", "17:00"))
 
     def test_summer_weekend_windows(self):
         s = SummerWeekend()
-        self.assertEqual(s.window1, ("06:50", "07:00"))
+        self.assertEqual(s.get_window1(False), ("06:50", "07:00"))
+        self.assertEqual(s.get_window1(True),  ("06:45", "07:00"))
         self.assertEqual(s.get_window2(False), ("16:20", "17:00"))
-        self.assertEqual(s.get_window2(True), ("15:45", "17:00"))
+        self.assertEqual(s.get_window2(True),  ("15:45", "17:00"))
 
-    def test_winter_weekday_windows_clear(self):
+    def test_winter_weekday_window1_same_both(self):
         s = WinterWeekday()
-        self.assertEqual(s.window1, ("06:30", "07:00"))
+        # Winter solar negligible — same window regardless of cloud
+        self.assertEqual(s.get_window1(False), s.get_window1(True))
+
+    def test_winter_weekday_window2_cloudy_earlier(self):
+        s = WinterWeekday()
         self.assertEqual(s.get_window2(False), ("14:20", "15:00"))
-
-    def test_winter_weekday_windows_cloudy(self):
-        s = WinterWeekday()
-        self.assertEqual(s.get_window2(True), ("13:00", "15:00"))
+        self.assertEqual(s.get_window2(True),  ("13:00", "15:00"))
 
     def test_winter_weekend_windows(self):
         s = WinterWeekend()
-        self.assertEqual(s.window1, ("06:50", "07:00"))
         self.assertEqual(s.get_window2(False), ("14:20", "15:00"))
-        self.assertEqual(s.get_window2(True), ("13:00", "15:00"))
+        self.assertEqual(s.get_window2(True),  ("13:00", "15:00"))
+
+    def test_cloudy_window1_always_starts_same_or_earlier(self):
+        for StratClass in [SummerWeekday, SummerWeekend, WinterWeekday, WinterWeekend]:
+            s = StratClass()
+            self.assertLessEqual(s.get_window1(True)[0], s.get_window1(False)[0],
+                msg=f"{StratClass.__name__}: cloudy w1 start should be <= clear")
 
     def test_cloudy_window2_always_starts_earlier(self):
         for StratClass in [SummerWeekday, SummerWeekend, WinterWeekday, WinterWeekend]:
             s = StratClass()
-            clear_start   = s.get_window2(False)[0]
-            cloudy_start  = s.get_window2(True)[0]
-            self.assertLessEqual(cloudy_start, clear_start,
-                msg=f"{StratClass.__name__}: cloudy start {cloudy_start} should be <= clear start {clear_start}")
+            self.assertLessEqual(s.get_window2(True)[0], s.get_window2(False)[0],
+                msg=f"{StratClass.__name__}: cloudy w2 start should be <= clear")
 
 
 # ── SOC targets ───────────────────────────────────────────────────────────────
@@ -253,8 +265,10 @@ class TestNearWindow(unittest.TestCase):
         """Create a minimal mock strategy with given window times."""
         class MockStrategy:
             window1           = (w1_start, w1_end)
+            window1_low_solar = (w1_start, w1_end)
             window2           = (w2_start, w2_end)
             window2_low_solar = (w2_start, w2_end)
+            def get_window1(self, low_solar): return self.window1
             def get_window2(self, low_solar): return self.window2
         return MockStrategy()
 

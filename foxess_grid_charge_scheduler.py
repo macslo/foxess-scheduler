@@ -105,7 +105,7 @@ def _near_window(now: datetime.datetime, strategy, low_solar: bool) -> bool:
     """Return True if now is within WINDOW_LEAD_MINUTES before either window start,
     or inside the window itself."""
     lead = cfg.WINDOW_LEAD_MINUTES
-    for start, end in (strategy.window1, strategy.get_window2(low_solar)):
+    for start, end in (strategy.get_window1(low_solar), strategy.get_window2(low_solar)):
         mins   = _minutes_until(now, start)
         h, m   = map(int, end.split(":"))
         end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -139,7 +139,7 @@ def main():
     low_solar = is_low_solar(radiation, winter)
 
     if not force and not _near_window(now, strategy, low_solar):
-        start1, end1 = strategy.window1
+        start1, end1 = strategy.get_window1(low_solar)
         start2, end2 = strategy.get_window2(low_solar)
         print(f"[SKIP] not near any window  (w1={start1}–{end1}  w2={start2}–{end2}{'  ☁️' if low_solar else '  ☀️'}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
@@ -160,7 +160,7 @@ def main():
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
         soc = 0
 
-    start1, end1   = strategy.window1
+    start1, end1   = strategy.get_window1(low_solar)
     start2, end2   = strategy.get_window2(low_solar)
     morning_target = strategy.morning_target(low_solar)
     evening_target = strategy.evening_target(low_solar)
