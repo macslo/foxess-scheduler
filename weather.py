@@ -13,6 +13,7 @@ Thresholds for ~6kWp system:
 """
 import datetime
 import time
+import random
 import requests
 from notifier import notify_warning
 
@@ -20,22 +21,31 @@ SOLAR_GOOD = 300
 SOLAR_POOR = 150
 
 
-def _fetch_with_retry(url, params, retries=3):
-    """GET with exponential backoff on server errors."""
+def _fetch_with_retry(url, params, retries=5):
+    """GET with exponential backoff + random jitter on server errors.
+
+    Jitter avoids thundering herd when many schedulers fire at the same time
+    (e.g. around full hours). Backoff: 2^i + random(0-2) seconds per retry.
+    """
+    # Initial jitter — spread requests that fire at the same cron second
+    time.sleep(random.uniform(0, 3))
+
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10)
             if r.status_code == 200:
                 return r
-            if 500 <= r.status_code < 600:
-                print(f"[weather] HTTP {r.status_code}, retry {i+1}/{retries}")
-                time.sleep(2 ** i)
+            if 500 <= r.status_code < 600 or r.status_code == 429:
+                wait = (2 ** i) + random.uniform(0, 2)
+                print(f"[weather] HTTP {r.status_code}, retry {i+1}/{retries} in {wait:.1f}s")
+                time.sleep(wait)
                 continue
             print(f"[weather] HTTP {r.status_code} (not retrying)")
             return r
         except requests.RequestException as e:
-            print(f"[weather] network error: {e}, retry {i+1}/{retries}")
-            time.sleep(2 ** i)
+            wait = (2 ** i) + random.uniform(0, 2)
+            print(f"[weather] network error: {e}, retry {i+1}/{retries} in {wait:.1f}s")
+            time.sleep(wait)
     return None
 
 
