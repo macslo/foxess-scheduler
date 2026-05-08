@@ -147,22 +147,34 @@ def main():
         print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
         sys.exit(0)
 
-    # ── Get strategy and solar forecast — both needed for proximity check ─────
+    # ── Get strategy early ────────────────────────────────────────────────────
     today    = now.date()
     strategy = get_strategy(today, cfg.TARIFF)
     winter   = today.month >= 10 or today.month <= 3
 
-    # Solar forecast must happen before proximity check — window2 start
-    # depends on low_solar (cloudy = earlier start)
+    # ── Phase 1: quick proximity check assuming worst case (low_solar=True) ──
+    # low_solar=True gives the earliest possible window starts — if we're not
+    # near even those, skip immediately without calling the weather API.
+    if not force and not _near_window(now, strategy, True):
+        start1, end1 = strategy.get_window1(True)
+        start2, end2 = strategy.get_window2(True)
+        print(f"[SKIP] not near any window  "
+              f"(w1={start1}–{end1}  w2={start2}–{end2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+        sys.exit(0)
+
+    # ── Phase 2: fetch solar forecast, then recheck only if clear day ────────
+    # If low_solar=True: windows are at earliest starts — Phase 1 already confirmed
+    #   we're near them, no recheck needed.
+    # If low_solar=False: windows are later (clear day = shorter windows) — recheck
+    #   because we might be near the cloudy start but not the clear start.
     radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
     low_solar = is_low_solar(radiation, winter)
 
-    if not force and not _near_window(now, strategy, low_solar):
-        start1, end1 = strategy.get_window1(low_solar)
-        start2, end2 = strategy.get_window2(low_solar)
-        print(f"[SKIP] not near any window  "
-              f"(w1={start1}–{end1}  w2={start2}–{end2}"
-              f"{'  ☁️' if low_solar else '  ☀️'}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+    if not force and not low_solar and not _near_window(now, strategy, False):
+        start1, end1 = strategy.get_window1(False)
+        start2, end2 = strategy.get_window2(False)
+        print(f"[SKIP] not near any window after solar check  "
+              f"(w1={start1}–{end1}  w2={start2}–{end2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
 
     if not API_KEY:
