@@ -112,7 +112,7 @@ class TestStrategyWindowTimes(unittest.TestCase):
         self.assertEqual(SummerWeekday().get_window2(False), ("16:20", "17:00"))
 
     def test_summer_weekday_window2_cloudy(self):
-        self.assertEqual(SummerWeekday().get_window2(True), ("15:45", "17:00"))
+        self.assertEqual(SummerWeekday().get_window2(True), ("15:30", "17:00"))
 
     def test_winter_weekday_window1_same_both(self):
         s = WinterWeekday()

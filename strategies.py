@@ -93,9 +93,9 @@ class SummerWeekday(ChargeStrategy):
     window1_low_solar = ("06:45", "07:00")
     # Window 2: cover 17:00-21:00 peak (4h)
     # Clear:  40 min — solar still contributing at 16:20
-    # Cloudy: 75 min — worst case 10%→85% at 5.63kW needs ~75 min
+    # Cloudy: 90 min — worst case 10%→95% at 5.63kW needs ~78 min, 12 min margin
     window2           = ("16:20", "17:00")
-    window2_low_solar = ("15:45", "17:00")
+    window2_low_solar = ("15:30", "17:00")
 
     def enable1(self): return True
     def enable2(self): return True
@@ -109,7 +109,7 @@ class SummerWeekend(ChargeStrategy):
     window1           = ("06:50", "07:00")   # disabled by default — no peak on weekends
     window1_low_solar = ("06:45", "07:00")
     window2           = ("16:20", "17:00")   # disabled by default
-    window2_low_solar = ("15:45", "17:00")
+    window2_low_solar = ("15:30", "17:00")
 
     def enable1(self): return False
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
