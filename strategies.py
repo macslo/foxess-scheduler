@@ -2,7 +2,7 @@
 Charging strategies for Tauron G13s tariff.
 
 Each class represents one season+day combination and encapsulates:
-  - charge window times
+  - charge window times (dynamic based on solar forecast)
   - whether each window should be active
   - SOC targets (with cloud bonus applied)
 
@@ -21,16 +21,14 @@ import config as cfg
 class ChargeStrategy(ABC):
     """Base class for all charging strategies."""
 
-    name: str           # human-readable label shown in logs
+    name: str
 
-    # Window 1: morning top-up (may vary by solar forecast)
-    # Use get_window1(low_solar) instead of window1 directly.
-    window1:           tuple[str, str]   # clear day default
+    # Window 1: morning top-up. Use get_window1(low_solar) — not window1 directly.
+    window1:           tuple[str, str]   # clear day
     window1_low_solar: tuple[str, str]   # cloudy day — starts earlier
 
-    # Window 2: pre-evening top-up (may vary by solar forecast)
-    # Use get_window2(low_solar) instead of window2 directly.
-    window2:           tuple[str, str]   # clear day default
+    # Window 2: pre-evening top-up. Use get_window2(low_solar) — not window2 directly.
+    window2:           tuple[str, str]   # clear day
     window2_low_solar: tuple[str, str]   # cloudy day — starts earlier
 
     @abstractmethod
@@ -52,16 +50,16 @@ class ChargeStrategy(ABC):
     def get_window1(self, low_solar: bool) -> tuple[str, str]:
         """Return window 1 times based on solar forecast.
 
-        Clear day: solar arrives ~08:00, only 1h peak to cover → short window ok.
-        Cloudy day: no solar help, need a few extra minutes at 5.63 kW charge rate.
+        Clear day: solar arrives ~08:00, only 1h peak to cover → short window.
+        Cloudy day: no solar help, need a few extra minutes at 5.63 kW.
         """
         return self.window1_low_solar if low_solar else self.window1
 
     def get_window2(self, low_solar: bool) -> tuple[str, str]:
         """Return window 2 times based on solar forecast.
 
-        Clear day: solar contributes during window → 40 min enough.
-        Cloudy day: battery charge rate ~5.63 kW — worst case 10%→85% needs ~75 min.
+        Clear day: solar still contributing → 40 min enough.
+        Cloudy day: worst case 10%→85% at 5.63 kW needs ~75 min.
         """
         return self.window2_low_solar if low_solar else self.window2
 
@@ -87,10 +85,10 @@ class ChargeStrategy(ABC):
 #   17:00–21:00  🟡 neutral (0.4972 zł/kWh)
 
 class SummerWeekday(ChargeStrategy):
-    name              = "G13s SUMMER weekday"
-    # Window 1: cover 07:00-09:00 peak (2h, ~1kW usage, solar from ~08:00 on clear days)
-    # Clear:  10 min — 1h effective peak, solar arrives ~08:00, worst case 10%→25% in ~8 min at 5.63kW
-    # Cloudy: 15 min — no solar help, same worst case needs ~15 min at 5.63kW
+    name = "G13s SUMMER weekday"
+    # Window 1: cover 07:00-09:00 peak (2h, ~1kW usage)
+    # Clear:  10 min — solar arrives ~08:00, worst case 10%→25% in ~8 min at 5.63kW
+    # Cloudy: 15 min — no solar, same worst case needs ~15 min at 5.63kW
     window1           = ("06:50", "07:00")
     window1_low_solar = ("06:45", "07:00")
     # Window 2: cover 17:00-21:00 peak (4h)
@@ -108,7 +106,7 @@ class SummerWeekday(ChargeStrategy):
 
 class SummerWeekend(ChargeStrategy):
     name              = "G13s SUMMER weekend"
-    window1           = ("06:50", "07:00")   # disabled by default (no peak on weekends)
+    window1           = ("06:50", "07:00")   # disabled by default — no peak on weekends
     window1_low_solar = ("06:45", "07:00")
     window2           = ("16:20", "17:00")   # disabled by default
     window2_low_solar = ("15:45", "17:00")
@@ -133,15 +131,14 @@ class SummerWeekend(ChargeStrategy):
 #   15:00–21:00  🟡 neutral (0.7669 zł/kWh)
 
 class WinterWeekday(ChargeStrategy):
-    name              = "G13s WINTER weekday"
-    # Window 1: cover 07:00-10:00 peak (3h, no solar in winter mornings)
-    # Clear:  30 min — longer than summer as solar doesn't help until later
-    # Cloudy: 30 min — same, solar minimal regardless in winter
-    window1           = ("06:30", "07:00")
-    window1_low_solar = ("06:30", "07:00")   # same — winter solar negligible either way
+    name = "G13s WINTER weekday"
+    # Window 1: cover 07:00-10:00 peak (3h)
+    # Same for clear/cloudy — winter solar negligible regardless
+    window1           = ("06:30", "07:00")   # 30 min
+    window1_low_solar = ("06:30", "07:00")   # same — solar minimal in winter mornings
     # Window 2: cover 15:00-21:00 peak (6h — worst block)
     # Clear:  40 min
-    # Cloudy: 120 min — worst case 10%→95% at 5.63kW needs ~75 min, extra margin for cold
+    # Cloudy: 120 min — worst case 10%→95% needs ~75 min, extra margin for cold
     window2           = ("14:20", "15:00")
     window2_low_solar = ("13:00", "15:00")
 
@@ -154,7 +151,7 @@ class WinterWeekday(ChargeStrategy):
 
 class WinterWeekend(ChargeStrategy):
     name              = "G13s WINTER weekend"
-    window1           = ("06:30", "07:00")   # disabled by default (no peak on weekends)
+    window1           = ("06:30", "07:00")   # disabled by default — no peak on weekends
     window1_low_solar = ("06:30", "07:00")
     window2           = ("14:20", "15:00")   # disabled by default
     window2_low_solar = ("13:00", "15:00")
@@ -192,7 +189,6 @@ class ManualStrategy(ChargeStrategy):
 
     def enable1(self): return self._enable1
     def enable2(self): return self._enable2
-
     def morning_target(self, low_solar): return 100
     def evening_target(self, low_solar): return 100
 

@@ -13,14 +13,12 @@ import requests
 
 WEBHOOK_URL = os.getenv("FOXESS_DISCORD_WEBHOOK", "")
 
-# Discord embed colours
-COLOR_GREEN  = 0x2ecc71   # windows disabled — solar/battery healthy
-COLOR_YELLOW = 0xf1c40f   # window(s) enabled — charging from grid
-COLOR_RED    = 0xe74c3c   # error
+COLOR_GREEN  = 0x2ecc71
+COLOR_YELLOW = 0xf1c40f
+COLOR_RED    = 0xe74c3c
 
 
 def _send(payload: dict):
-    """POST embed payload to Discord webhook. Silent if no webhook configured."""
     if not WEBHOOK_URL:
         return
     try:
@@ -82,7 +80,6 @@ def notify_run(
 
 
 def notify_error(context: str, error: Exception):
-    """Send a red error embed to Discord."""
     if not WEBHOOK_URL:
         return
     _send(_embed(
@@ -93,7 +90,6 @@ def notify_error(context: str, error: Exception):
 
 
 def notify_warning(message: str):
-    """Send a yellow warning embed to Discord."""
     if not WEBHOOK_URL:
         return
     _send(_embed(

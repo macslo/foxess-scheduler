@@ -6,45 +6,37 @@ Uses shortwave_radiation (W/m²) instead of cloud_cover — directly predicts
 solar energy hitting the ground, much more accurate than cloud % for
 determining whether panels will produce meaningful output.
 
-Thresholds for your ~6kWp system:
-  > 300 W/m²  → good solar, battery will recharge naturally
+Thresholds for ~6kWp system:
+  > 300 W/m²   → good solar, battery will recharge naturally
   150-300 W/m² → marginal, apply cloud bonus
-  < 150 W/m²  → poor solar, need grid backup
+  < 150 W/m²   → poor solar, need grid backup
 """
 import datetime
 import time
 import requests
 from notifier import notify_warning
 
-# W/m² thresholds
-SOLAR_GOOD = 300   # above this → low_solar = False
-SOLAR_POOR = 150   # below this → low_solar = True (marginal between 150-300)
+SOLAR_GOOD = 300
+SOLAR_POOR = 150
 
 
 def _fetch_with_retry(url, params, retries=3):
-    """GET request with exponential backoff on server errors."""
+    """GET with exponential backoff on server errors."""
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10)
-
             if r.status_code == 200:
                 return r
-
-            # retry on server errors (502/503/504)
             if 500 <= r.status_code < 600:
                 print(f"[weather] HTTP {r.status_code}, retry {i+1}/{retries}")
                 time.sleep(2 ** i)
                 continue
-
-            # non-retryable (400 etc.)
             print(f"[weather] HTTP {r.status_code} (not retrying)")
             return r
-
         except requests.RequestException as e:
             print(f"[weather] network error: {e}, retry {i+1}/{retries}")
             time.sleep(2 ** i)
-
-    return None  # all retries exhausted
+    return None
 
 
 def get_solar_forecast(lat: float, lon: float) -> float:
@@ -82,7 +74,7 @@ def get_solar_forecast(lat: float, lon: float) -> float:
         if not radiation:
             return 999
 
-        avg = sum(radiation) / len(radiation)
+        avg     = sum(radiation) / len(radiation)
         quality = "☀️ good" if avg >= SOLAR_GOOD else ("⛅ marginal" if avg >= SOLAR_POOR else "☁️ poor")
         print(f"  Solar   : {avg:.0f} W/m²  ({label}, {len(radiation)}h avg)  {quality}")
         return avg
@@ -90,16 +82,16 @@ def get_solar_forecast(lat: float, lon: float) -> float:
     except Exception as e:
         notify_warning(f"Solar forecast failed: {e}")
         print(f"Warning: solar forecast failed ({e})")
-        return 999  # assume good solar on failure — avoid unnecessary grid charging
+        return 999
 
 
 def is_low_solar(radiation: float, winter: bool) -> bool:
     """Return True when solar forecast suggests poor panel output.
 
-    Winter threshold is lower — panels produce less even on clear days
-    due to low sun angle, so we're more conservative about triggering bonus.
+    Winter: only truly poor days trigger bonus — solar is weak regardless.
+    Summer: marginal days (150-300) also trigger bonus.
     """
     if winter:
-        return radiation < SOLAR_POOR        # only truly poor days get bonus
+        return radiation < SOLAR_POOR
     else:
-        return radiation < SOLAR_GOOD        # marginal days (150-300) also get bonus
+        return radiation < SOLAR_GOOD
