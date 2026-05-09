@@ -106,15 +106,15 @@ class SummerWeekday(ChargeStrategy):
 
 class SummerWeekend(ChargeStrategy):
     name              = "G13s SUMMER weekend"
-    window1           = ("06:50", "07:00")   # disabled by default — no peak on weekends
-    window1_low_solar = ("06:45", "07:00")
+    window1           = ("06:50", "07:00")   # disabled — no peak on weekends
+    window1_low_solar = ("06:50", "07:00")   # disabled — no peak on weekends
     window2           = ("16:20", "17:00")   # disabled by default
     window2_low_solar = ("15:30", "17:00")
 
     def enable1(self): return False
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
-    def morning_target(self, low_solar): return self._m(cfg.TARGET_SUMMER_WEEKEND_MORNING, low_solar)
+    def morning_target(self, low_solar): return cfg.TARGET_SUMMER_WEEKEND_MORNING
     def evening_target(self, low_solar): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, low_solar)
 
 
