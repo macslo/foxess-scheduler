@@ -20,7 +20,12 @@ from strategies import (
     ManualStrategy,
 )
 from weather import is_low_solar, SOLAR_GOOD, SOLAR_POOR
-from foxess_grid_charge_scheduler import _minutes_until, _near_window, _is_closed, _is_not_opened_yet
+from windows import (
+    near_window     as _near_window,
+    is_closed       as _is_closed,
+    is_not_opened_yet as _is_not_opened_yet,
+    minutes_until   as _minutes_until,
+)
 import config as cfg
 
 
