@@ -48,14 +48,14 @@ Prices from official Tauron PDF (12/2025). Total = sales + distribution variable
 
 ### Charge windows
 
-Sized for a ~10 kW grid charge rate. Window length covers worst-case SOC top-up with margin.
+Windows are **dynamic** — start time depends on solar forecast. On cloudy days the battery charge rate to battery is ~5.63 kW (rest covers house load), so more time is needed. Sized for 9.4 kWh battery with 10% discharge floor.
 
-| Strategy | Window 1 (morning) | Window 2 (evening) |
-|----------|-------------------|-------------------|
-| Summer weekday | 06:50 – 07:00 (10 min) | 16:20 – 17:00 (40 min) |
-| Summer weekend | 06:50 – 07:00 — disabled | 16:20 – 17:00 — disabled by default |
-| Winter weekday | 06:30 – 07:00 (30 min) | 14:20 – 15:00 (40 min) |
-| Winter weekend | 06:50 – 07:00 — disabled | 14:20 – 15:00 — disabled by default |
+| Strategy | Window 1 ☀️ clear | Window 1 ☁️ cloudy | Window 2 ☀️ clear | Window 2 ☁️ cloudy |
+|----------|------------------|------------------|------------------|------------------|
+| Summer weekday | 06:50–07:00 (10 min) | 06:45–07:00 (15 min) | 16:20–17:00 (40 min) | 15:30–17:00 (90 min) |
+| Summer weekend | disabled | disabled | disabled by default | disabled by default |
+| Winter weekday | 06:30–07:00 (30 min) | 06:30–07:00 (same) | 14:20–15:00 (40 min) | 13:00–15:00 (120 min) |
+| Winter weekend | disabled | disabled | disabled by default | disabled by default |
 
 ---
 
@@ -138,9 +138,11 @@ TARGET_WINTER_WEEKDAY_EVENING = 95   # 6h peak — worst block
 TARGET_WINTER_WEEKEND_MORNING = 35
 TARGET_WINTER_WEEKEND_EVENING = 85
 
-# Cloud bonus — added to targets when solar forecast is poor
-CLOUD_BONUS_MORNING = 10   # morning: low usage regardless of weather
-CLOUD_BONUS_EVENING = 10   # evening: current SOC already reflects the day's solar
+# Cloud bonus — added to targets when solar forecast is poor (shortwave radiation W/m²)
+# Morning: low usage regardless of weather — small bonus
+# Evening: pushes target to 95% cap on cloudy days (85 + 15 = 100, capped at 95)
+CLOUD_BONUS_MORNING = 10
+CLOUD_BONUS_EVENING = 15
 ```
 
 All `config.py` values can be overridden in `.env` using the `FOXESS_` prefix.
@@ -155,7 +157,7 @@ All `config.py` values can be overridden in `.env` using the `FOXESS_` prefix.
 python3 foxess_grid_charge_scheduler.py
 ```
 
-### Force run (bypass window proximity check — still respects SOC logic, useful for testing)
+### Force run (bypass window proximity check — useful for testing)
 
 ```bash
 python3 foxess_grid_charge_scheduler.py --force
@@ -166,19 +168,38 @@ python3 foxess_grid_charge_scheduler.py --force
 The script self-manages when to run — cron just needs to fire every 2 minutes:
 
 ```
-*/2 * * * * update_and_run.sh
+*/2 * * * * /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/update_and_run.sh
 ```
 
 `update_and_run.sh` pulls the latest version from GitHub then runs the scheduler. Copy it to your QNAP and make it executable:
+
+```bash
+chmod +x /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud/update_and_run.sh
+```
+
+### First-time git setup on QNAP
+
+```bash
+# Install git via Entware
+opkg update && opkg install git
+
+# Initialise repo in your working directory
+cd /share/CACHEDEV1_DATA/homes/madmin/share/foxcloud
+git init
+git remote add origin https://github.com/macslo/foxess-scheduler.git
+git pull origin main
+```
 
 ---
 
 ## Discord notifications
 
 The scheduler sends Discord embed messages on:
-- **Window state change** — when a window is enabled or disabled (yellow/green)
+- **Window state change** — when a window is enabled or disabled (⚡ yellow = charging, 🌞 green = solar handling it)
 - **Errors** — API failures, missing config (red)
-- **Daily summary** — first run each day with SOC, solar forecast and window states (blue)
+- **Warnings** — SOC read failure, weather forecast failure (yellow)
+
+Silent days = good days. No notification means solar handled everything without grid charging.
 
 Set `FOXESS_DISCORD_WEBHOOK` in `.env` to activate. Leave blank to disable.
 
@@ -186,25 +207,33 @@ Set `FOXESS_DISCORD_WEBHOOK` in `.env` to activate. Leave blank to disable.
 
 ## Example output
 
+**Full run (near a window):**
 ```
-[RUN] 2026-05-04T06:51:23.456789
-  Solar   : 312 W/m²  (solar hours 09:00–11:00, 2h avg)  ☀️ good
+[RUN] 2026-05-08T15:28:01.681125 [FORCED]
+  Solar   : 180 W/m²  (solar hours 09:00–11:00, 2h avg)  ⛅ marginal
 FoxESS Grid Charge Scheduler
-  Device  : XYZ
-  Today   : Monday, 04 May 2026
-  Location: 50.2849, 18.6717
-  Strategy: G13s SUMMER weekday
-  SOC     : 22.0%  (morning target=15%  evening target=85%)
-  Window 1: 06:50-07:00  -> ENABLE
-  Window 2: 16:20-17:00  -> ENABLE
+  Device  : YOUR_DEVICE_SN
+  Today   : Thursday, 08 May 2026
+  Location: 50.XXXX, 18.XXXX
+  Strategy: G13s SUMMER weekday  +cloud bonus
+  SOC     : 17.0%  (morning target=25%  evening target=95%)
+  Window 1: 06:45–07:00  -> FROZEN (window closed)
+  Window 2: 15:30–17:00  -> ENABLE
 
   Current : window1=False  window2=False
-  Done: window1=ENABLED  window2=ENABLED
+  Done: window1=DISABLED  window2=ENABLED
 ```
 
+**Skip (not near any window):**
 ```
-[RUN] 2026-05-04T10:15:00.000000
-[SKIP] not near any window  (w1=06:50–07:00  w2=16:20–17:00  lead=3min)
+[RUN] 2026-05-08T12:34:01.681125
+[SKIP] not near any window  (w1=06:45–07:00  w2=15:30–17:00  lead=3min)
+```
+
+**Skip (outside active hours):**
+```
+[RUN] 2026-05-08T23:00:01.000000
+[SKIP] outside active hours (6:00–21:00)
 ```
 
 ---
