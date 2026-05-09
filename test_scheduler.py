@@ -20,11 +20,12 @@ from strategies import (
     ManualStrategy,
 )
 from weather import is_low_solar, SOLAR_GOOD, SOLAR_POOR
+import windows
 from windows import (
-    near_window     as _near_window,
-    is_closed       as _is_closed,
+    near_window       as _near_window,
+    is_closed         as _is_closed,
     is_not_opened_yet as _is_not_opened_yet,
-    minutes_until   as _minutes_until,
+    minutes_until     as _minutes_until,
 )
 import config as cfg
 

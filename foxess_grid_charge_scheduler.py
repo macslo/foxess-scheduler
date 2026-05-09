@@ -37,10 +37,10 @@ FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 # ── Modules ───────────────────────────────────────────────────────────────────
 import config as cfg
 import foxess_api as api
+import windows
 from strategies import get_strategy
 from notifier import notify_run, notify_error, notify_warning
 from weather import get_solar_forecast, is_low_solar
-from windows import near_window, is_closed, is_not_opened_yet, window_status, minutes_until
 
 # Pass API key to the api module
 api.API_KEY = API_KEY
@@ -65,7 +65,7 @@ def main():
     # ── Phase 1: quick proximity check assuming worst case (low_solar=True) ──
     # low_solar=True = earliest possible window starts — if not near even those,
     # skip immediately without calling the weather API.
-    if not force and not near_window(now, strategy, True):
+    if not force and not windows.near_window(now, strategy, True):
         start1, end1 = strategy.get_window1(True)
         start2, end2 = strategy.get_window2(True)
         print(f"[SKIP] not near any window  "
@@ -78,7 +78,7 @@ def main():
     radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
     low_solar = is_low_solar(radiation, winter)
 
-    if not force and not low_solar and not near_window(now, strategy, False):
+    if not force and not low_solar and not windows.near_window(now, strategy, False):
         start1, end1 = strategy.get_window1(False)
         start2, end2 = strategy.get_window2(False)
         print(f"[SKIP] not near any window after solar check  "
@@ -115,9 +115,9 @@ def main():
 
     # ── Freeze windows outside their active period ────────────────────────────
     # Only touch a window when near it — not hours before or after.
-    if is_closed(now, end1) or is_not_opened_yet(now, start1):
+    if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
         enable1 = None
-    if is_closed(now, end2) or is_not_opened_yet(now, start2):
+    if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
         enable2 = None
 
     # ── Report ────────────────────────────────────────────────────────────────
@@ -127,8 +127,8 @@ def main():
     print(f"  Location: {FORECAST_LAT}, {FORECAST_LON}")
     print(f"  Strategy: {strategy.name}{'  +cloud bonus' if low_solar else ''}")
     print(f"  SOC     : {soc:.1f}%  (morning target={morning_target}%  evening target={evening_target}%)")
-    print(f"  Window 1: {start1}–{end1}  -> {window_status(now, enable1, start1, end1)}")
-    print(f"  Window 2: {start2}–{end2}  -> {window_status(now, enable2, start2, end2)}")
+    print(f"  Window 1: {start1}–{end1}  -> {windows.window_status(now, enable1, start1, end1)}")
+    print(f"  Window 2: {start2}–{end2}  -> {windows.window_status(now, enable2, start2, end2)}")
     print()
 
     # ── Read current state ────────────────────────────────────────────────────
