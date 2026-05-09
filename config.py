@@ -92,4 +92,4 @@ TARGET_WINTER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKEND_EVEN
 #   nudge for borderline cases where SOC is just above the base target.
 #   Lower bonus here since SOC is a better signal than forecast at this point.
 CLOUD_BONUS_MORNING = int(os.getenv("FOXESS_CLOUD_BONUS_MORNING", "10"))  # low usage in morning regardless of weather
-CLOUD_BONUS_EVENING = int(os.getenv("FOXESS_CLOUD_BONUS_EVENING", "15"))  # pushes evening target to 95% cap on cloudy days
+CLOUD_BONUS_EVENING = int(os.getenv("FOXESS_CLOUD_BONUS_EVENING", "15"))  # pushes evening target to 100% on cloudy days
