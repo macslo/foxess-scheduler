@@ -2,7 +2,7 @@
 Charging strategies for Tauron G13s tariff.
 
 Each class represents one season+day combination and encapsulates:
-  - charge window times (dynamic based on solar forecast)
+  - charge window times (dynamic based on ChargeContext)
   - whether each window should be active
   - SOC targets (with cloud bonus applied)
 
@@ -12,10 +12,15 @@ Window sizing rationale (9.4 kWh battery, 10% floor = 8.46 kWh usable):
   - Grid charge rate to battery: ~5.63 kW (rest covers house load)
   - Clear days: solar contributes during/after window → shorter window ok
   - Cloudy days: no solar help → need full time based on 5.63 kW rate
+
+Static strategies use fixed windows based on low_solar flag.
+Dynamic strategies (g13s_dynamic tariff) calculate window start at
+runtime from current SOC and PV output for maximum accuracy.
 """
 import datetime
 from abc import ABC, abstractmethod
 import config as cfg
+from context import ChargeContext
 
 
 class ChargeStrategy(ABC):
@@ -23,11 +28,11 @@ class ChargeStrategy(ABC):
 
     name: str
 
-    # Window 1: morning top-up. Use get_window1(low_solar) — not window1 directly.
+    # Window 1: morning top-up. Use get_window1(ctx).
     window1:           tuple[str, str]   # clear day
     window1_low_solar: tuple[str, str]   # cloudy day — starts earlier
 
-    # Window 2: pre-evening top-up. Use get_window2(low_solar) — not window2 directly.
+    # Window 2: pre-evening top-up. Use get_window2(ctx).
     window2:           tuple[str, str]   # clear day
     window2_low_solar: tuple[str, str]   # cloudy day — starts earlier
 
@@ -40,35 +45,27 @@ class ChargeStrategy(ABC):
         """Whether window 2 should be considered at all today."""
 
     @abstractmethod
-    def morning_target(self, low_solar: bool) -> int:
+    def morning_target(self, ctx: ChargeContext) -> int:
         """SOC% threshold below which window 1 activates."""
 
     @abstractmethod
-    def evening_target(self, low_solar: bool) -> int:
+    def evening_target(self, ctx: ChargeContext) -> int:
         """SOC% threshold below which window 2 activates."""
 
-    def get_window1(self, low_solar: bool) -> tuple[str, str]:
-        """Return window 1 times based on solar forecast.
+    def get_window1(self, ctx: ChargeContext) -> tuple[str, str]:
+        """Return window 1 times based on context."""
+        return self.window1_low_solar if ctx.low_solar else self.window1
 
-        Clear day: solar arrives ~08:00, only 1h peak to cover → short window.
-        Cloudy day: no solar help, need a few extra minutes at 5.63 kW.
-        """
-        return self.window1_low_solar if low_solar else self.window1
+    def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
+        """Return window 2 times based on context."""
+        return self.window2_low_solar if ctx.low_solar else self.window2
 
-    def get_window2(self, low_solar: bool) -> tuple[str, str]:
-        """Return window 2 times based on solar forecast.
-
-        Clear day: solar still contributing → 40 min enough.
-        Cloudy day: worst case 10%→85% at 5.63 kW needs ~75 min.
-        """
-        return self.window2_low_solar if low_solar else self.window2
-
-    def _m(self, base: int, low_solar: bool) -> int:
-        bonus = cfg.CLOUD_BONUS_MORNING if low_solar else 0
+    def _m(self, base: int, ctx: ChargeContext) -> int:
+        bonus = cfg.CLOUD_BONUS_MORNING if ctx.low_solar else 0
         return min(base + bonus, 100)
 
-    def _e(self, base: int, low_solar: bool) -> int:
-        bonus = cfg.CLOUD_BONUS_EVENING if low_solar else 0
+    def _e(self, base: int, ctx: ChargeContext) -> int:
+        bonus = cfg.CLOUD_BONUS_EVENING if ctx.low_solar else 0
         return min(base + bonus, 100)
 
 
@@ -93,15 +90,15 @@ class SummerWeekday(ChargeStrategy):
     window1_low_solar = ("06:45", "07:00")
     # Window 2: cover 17:00-21:00 peak (4h)
     # Clear:  40 min — solar still contributing at 16:20
-    # Cloudy: 90 min — worst case 10%→95% at 5.63kW needs ~78 min, 12 min margin
+    # Cloudy: 90 min — worst case 10%→100% at 5.63kW needs ~90 min
     window2           = ("16:20", "17:00")
     window2_low_solar = ("15:30", "17:00")
 
     def enable1(self): return True
     def enable2(self): return True
 
-    def morning_target(self, low_solar): return self._m(cfg.TARGET_SUMMER_WEEKDAY_MORNING, low_solar)
-    def evening_target(self, low_solar): return self._e(cfg.TARGET_SUMMER_WEEKDAY_EVENING, low_solar)
+    def morning_target(self, ctx): return self._m(cfg.TARGET_SUMMER_WEEKDAY_MORNING, ctx)
+    def evening_target(self, ctx): return self._e(cfg.TARGET_SUMMER_WEEKDAY_EVENING, ctx)
 
 
 class SummerWeekend(ChargeStrategy):
@@ -114,8 +111,8 @@ class SummerWeekend(ChargeStrategy):
     def enable1(self): return False
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
-    def morning_target(self, low_solar): return cfg.TARGET_SUMMER_WEEKEND_MORNING
-    def evening_target(self, low_solar): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, low_solar)
+    def morning_target(self, ctx): return cfg.TARGET_SUMMER_WEEKEND_MORNING
+    def evening_target(self, ctx): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, ctx)
 
 
 # ── Winter strategies (1 Oct – 31 Mar) ───────────────────────────────────────
@@ -132,35 +129,119 @@ class SummerWeekend(ChargeStrategy):
 
 class WinterWeekday(ChargeStrategy):
     name = "G13s WINTER weekday"
-    # Window 1: cover 07:00-10:00 peak (3h)
-    # Same for clear/cloudy — winter solar negligible regardless
-    window1           = ("06:30", "07:00")   # 30 min
-    window1_low_solar = ("06:30", "07:00")   # same — solar minimal in winter mornings
-    # Window 2: cover 15:00-21:00 peak (6h — worst block)
-    # Clear:  40 min
-    # Cloudy: 120 min — worst case 10%→95% needs ~75 min, extra margin for cold
+    window1           = ("06:30", "07:00")
+    window1_low_solar = ("06:30", "07:00")
     window2           = ("14:20", "15:00")
     window2_low_solar = ("13:00", "15:00")
 
     def enable1(self): return True
     def enable2(self): return True
 
-    def morning_target(self, low_solar): return self._m(cfg.TARGET_WINTER_WEEKDAY_MORNING, low_solar)
-    def evening_target(self, low_solar): return self._e(cfg.TARGET_WINTER_WEEKDAY_EVENING, low_solar)
+    def morning_target(self, ctx): return self._m(cfg.TARGET_WINTER_WEEKDAY_MORNING, ctx)
+    def evening_target(self, ctx): return self._e(cfg.TARGET_WINTER_WEEKDAY_EVENING, ctx)
 
 
 class WinterWeekend(ChargeStrategy):
     name              = "G13s WINTER weekend"
-    window1           = ("06:30", "07:00")   # disabled by default — no peak on weekends
+    window1           = ("06:30", "07:00")
     window1_low_solar = ("06:30", "07:00")
-    window2           = ("14:20", "15:00")   # disabled by default
+    window2           = ("14:20", "15:00")
     window2_low_solar = ("13:00", "15:00")
 
     def enable1(self): return False
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
-    def morning_target(self, low_solar): return self._m(cfg.TARGET_WINTER_WEEKEND_MORNING, low_solar)
-    def evening_target(self, low_solar): return self._e(cfg.TARGET_WINTER_WEEKEND_EVENING, low_solar)
+    def morning_target(self, ctx): return self._m(cfg.TARGET_WINTER_WEEKEND_MORNING, ctx)
+    def evening_target(self, ctx): return self._e(cfg.TARGET_WINTER_WEEKEND_EVENING, ctx)
+
+
+# ── Dynamic strategies (g13s_dynamic tariff) ─────────────────────────────────
+# Inherit static windows as fallback, override get_window2() to calculate
+# start time dynamically from current SOC and PV output.
+
+def _dynamic_window2_start(ctx: ChargeContext, end_time: str, target: int) -> str:
+    """Calculate window 2 start time based on current SOC and PV output.
+
+    Uses actual battery charge rate accounting for PV contribution:
+      net_rate = BATTERY_CHARGE_RATE - pv_kw  (PV covers house load)
+      minutes  = (target - soc) × BATTERY_KWH / net_rate × 60 / 100
+      start    = end_time - minutes × SAFETY_MARGIN
+
+    Falls back to static window if SOC/PV unavailable.
+    """
+    if ctx.soc is None or ctx.pv_kw is None:
+        return None  # signal to use static fallback
+
+    soc_needed = max(target - ctx.soc, 0)
+    if soc_needed <= 0:
+        return None  # already at target, static window fine
+
+    # Net charge rate to battery — PV offsets house load, not directly battery
+    net_rate = max(cfg.BATTERY_CHARGE_RATE_KW - ctx.pv_kw, 1.0)
+    minutes  = soc_needed * cfg.BATTERY_KWH / net_rate * 60 / 100
+    minutes *= cfg.CHARGE_SAFETY_MARGIN
+
+    h, m   = map(int, end_time.split(":"))
+    end_dt = datetime.datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+    start_dt = end_dt - datetime.timedelta(minutes=int(minutes))
+
+    # Don't start before 06:00 to avoid charging during night rate
+    earliest = end_dt.replace(hour=6, minute=0)
+    if start_dt < earliest:
+        start_dt = earliest
+
+    result = start_dt.strftime("%H:%M")
+    print(f"  Dynamic : SOC={ctx.soc:.0f}%  PV={ctx.pv_kw:.2f}kW  "
+          f"net_rate={net_rate:.2f}kW  need={minutes:.0f}min  start={result}")
+    return result
+
+
+class DynamicSummerWeekday(SummerWeekday):
+    name = "G13s DYNAMIC SUMMER weekday"
+
+    def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
+        end    = "17:00"
+        target = self.evening_target(ctx)
+        start  = _dynamic_window2_start(ctx, end, target)
+        if start is None:
+            return super().get_window2(ctx)  # fallback to static
+        return start, end
+
+
+class DynamicSummerWeekend(SummerWeekend):
+    name = "G13s DYNAMIC SUMMER weekend"
+
+    def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
+        end    = "17:00"
+        target = self.evening_target(ctx)
+        start  = _dynamic_window2_start(ctx, end, target)
+        if start is None:
+            return super().get_window2(ctx)
+        return start, end
+
+
+class DynamicWinterWeekday(WinterWeekday):
+    name = "G13s DYNAMIC WINTER weekday"
+
+    def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
+        end    = "15:00"
+        target = self.evening_target(ctx)
+        start  = _dynamic_window2_start(ctx, end, target)
+        if start is None:
+            return super().get_window2(ctx)
+        return start, end
+
+
+class DynamicWinterWeekend(WinterWeekend):
+    name = "G13s DYNAMIC WINTER weekend"
+
+    def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
+        end    = "15:00"
+        target = self.evening_target(ctx)
+        start  = _dynamic_window2_start(ctx, end, target)
+        if start is None:
+            return super().get_window2(ctx)
+        return start, end
 
 
 # ── Manual strategy ───────────────────────────────────────────────────────────
@@ -189,8 +270,8 @@ class ManualStrategy(ChargeStrategy):
 
     def enable1(self): return self._enable1
     def enable2(self): return self._enable2
-    def morning_target(self, low_solar): return 100
-    def evening_target(self, low_solar): return 100
+    def morning_target(self, ctx): return 100
+    def evening_target(self, ctx): return 100
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -198,12 +279,19 @@ class ManualStrategy(ChargeStrategy):
 def get_strategy(date: datetime.date, tariff: str) -> ChargeStrategy:
     """Return the appropriate strategy for the given date and tariff."""
     is_weekday = date.weekday() < 5
+    dynamic    = tariff == "g13s_dynamic"
 
     if tariff == "manual":
         return ManualStrategy(is_weekday)
 
     winter = date.month >= 10 or date.month <= 3
     if winter:
-        return WinterWeekday() if is_weekday else WinterWeekend()
+        if is_weekday:
+            return DynamicWinterWeekday() if dynamic else WinterWeekday()
+        else:
+            return DynamicWinterWeekend() if dynamic else WinterWeekend()
     else:
-        return SummerWeekday() if is_weekday else SummerWeekend()
+        if is_weekday:
+            return DynamicSummerWeekday() if dynamic else SummerWeekday()
+        else:
+            return DynamicSummerWeekend() if dynamic else SummerWeekend()

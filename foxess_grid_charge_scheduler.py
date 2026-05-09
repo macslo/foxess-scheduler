@@ -38,11 +38,11 @@ FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 import config as cfg
 import foxess_api as api
 import windows
-from strategies import get_strategy
-from notifier import notify_run, notify_error, notify_warning
-from weather import get_solar_forecast, is_low_solar
+import strategies
+import notifier
+import weather
+from context import ChargeContext
 
-# Pass API key to the api module
 api.API_KEY = API_KEY
 
 
@@ -59,37 +59,40 @@ def main():
 
     # ── Get strategy ──────────────────────────────────────────────────────────
     today    = now.date()
-    strategy = get_strategy(today, cfg.TARIFF)
+    strategy = strategies.get_strategy(today, cfg.TARIFF)
     winter   = today.month >= 10 or today.month <= 3
 
-    # ── Phase 1: quick proximity check assuming worst case (low_solar=True) ──
-    # low_solar=True = earliest possible window starts — if not near even those,
-    # skip immediately without calling the weather API.
-    if not force and not windows.near_window(now, strategy, True):
-        start1, end1 = strategy.get_window1(True)
-        start2, end2 = strategy.get_window2(True)
+    # ── Build a minimal context for proximity checks (soc/pv unknown yet) ────
+    # Phase 1 uses low_solar=True (worst case = earliest windows).
+    # We don't have SOC/PV yet — dynamic strategies fall back to static windows.
+    ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
+
+    # ── Phase 1: quick proximity check — no API calls ─────────────────────────
+    if not force and not windows.near_window(now, strategy, ctx_worst):
+        s1, e1 = strategy.get_window1(ctx_worst)
+        s2, e2 = strategy.get_window2(ctx_worst)
         print(f"[SKIP] not near any window  "
-              f"(w1={start1}–{end1}  w2={start2}–{end2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+              f"(w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
 
-    # ── Phase 2: fetch solar forecast, recheck only if clear day ─────────────
-    # low_solar=True: windows already at earliest — phase 1 confirmed proximity.
-    # low_solar=False: windows are later — recheck since we may be too early.
-    radiation = get_solar_forecast(FORECAST_LAT, FORECAST_LON)
-    low_solar = is_low_solar(radiation, winter)
+    # ── Phase 2: fetch solar forecast ────────────────────────────────────────
+    radiation = weather.get_solar_forecast(FORECAST_LAT, FORECAST_LON)
+    low_solar = weather.is_low_solar(radiation, winter)
 
-    if not force and not low_solar and not windows.near_window(now, strategy, False):
-        start1, end1 = strategy.get_window1(False)
-        start2, end2 = strategy.get_window2(False)
+    # Recheck with clear-day windows if not low_solar (they start later)
+    ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
+    if not force and not low_solar and not windows.near_window(now, strategy, ctx_clear):
+        s1, e1 = strategy.get_window1(ctx_clear)
+        s2, e2 = strategy.get_window2(ctx_clear)
         print(f"[SKIP] not near any window after solar check  "
-              f"(w1={start1}–{end1}  w2={start2}–{end2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+              f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
         sys.exit(0)
 
     # ── Validate API key ──────────────────────────────────────────────────────
     if not API_KEY:
         msg = "FOXESS_API_KEY is not set. Get your key at foxesscloud.com → Personal Centre → API Management"
         print(f"ERROR: {msg}")
-        notify_error("Missing API key", Exception(msg))
+        notifier.notify_error("Missing API key", Exception(msg))
         sys.exit(1)
 
     # ── Resolve device SN ─────────────────────────────────────────────────────
@@ -98,23 +101,28 @@ def main():
         print("FOXESS_SN not set -- auto-detecting...")
         sn = api.get_first_sn()
 
-    # ── Read SOC ──────────────────────────────────────────────────────────────
-    soc = api.get_battery_soc(sn)
+    # ── Read SOC and PV in one call ───────────────────────────────────────────
+    soc, pv_kw = api.get_device_data(sn)
     if soc is None:
         print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
         soc = 0
+    if pv_kw is None:
+        print("PV unknown -- assuming 0 kW")
+        pv_kw = 0.0
+
+    # ── Build full context ────────────────────────────────────────────────────
+    ctx = ChargeContext(low_solar=low_solar, soc=soc, pv_kw=pv_kw, winter=winter)
 
     # ── Determine windows and targets ─────────────────────────────────────────
-    start1, end1   = strategy.get_window1(low_solar)
-    start2, end2   = strategy.get_window2(low_solar)
-    morning_target = strategy.morning_target(low_solar)
-    evening_target = strategy.evening_target(low_solar)
+    start1, end1   = strategy.get_window1(ctx)
+    start2, end2   = strategy.get_window2(ctx)
+    morning_target = strategy.morning_target(ctx)
+    evening_target = strategy.evening_target(ctx)
 
     enable1 = strategy.enable1() and (soc < morning_target)
     enable2 = strategy.enable2() and (soc < evening_target)
 
     # ── Freeze windows outside their active period ────────────────────────────
-    # Only touch a window when near it — not hours before or after.
     if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
         enable1 = None
     if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
@@ -131,18 +139,15 @@ def main():
     print(f"  Window 2: {start2}–{end2}  -> {windows.window_status(now, enable2, start2, end2)}")
     print()
 
-    # ── Read current state ────────────────────────────────────────────────────
+    # ── Read current state and apply if needed ────────────────────────────────
     changed = False
     try:
         cur      = api.get_charge_settings(sn)
         already1 = cur.get("enable1")
         already2 = cur.get("enable2")
 
-        # Frozen windows keep their current state
-        if enable1 is None:
-            enable1 = already1
-        if enable2 is None:
-            enable2 = already2
+        if enable1 is None: enable1 = already1
+        if enable2 is None: enable2 = already2
 
         print(f"  Current : window1={already1}  window2={already2}")
         if already1 == enable1 and already2 == enable2:
@@ -154,12 +159,12 @@ def main():
             changed = True
 
     except Exception as e:
-        notify_error("Failed to read/set charge windows", e)
+        notifier.notify_error("Failed to read/set charge windows", e)
         print(f"  Error: {e}")
         return
 
     # ── Notify ────────────────────────────────────────────────────────────────
-    notify_run(
+    notifier.notify_run(
         sn=sn,
         strategy_name=strategy.name,
         soc=soc,

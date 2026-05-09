@@ -108,8 +108,8 @@ FOXESS_SN=auto
 
 # Your location for solar forecast
 # Default in config.py is Gliwice, Poland
-FOXESS_LAT=50.2849
-FOXESS_LON=18.6717
+FOXESS_LAT=50.XXXX
+FOXESS_LON=18.XXXX
 
 # Discord webhook for notifications (optional)
 # Discord channel → Edit → Integrations → Webhooks → New Webhook → Copy URL
@@ -249,7 +249,7 @@ Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, 
 | Winter weekday | 65% | 95% |
 | Winter weekend | 35% (no peak) | 85% |
 
-Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production, so a high target naturally enables charging only when solar hasn't done the job.
+Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production, so a high target naturally enables charging only when solar hasn't done the job. On cloudy days the target reaches 100% — FoxESS handles this safely and simply stops charging when full.
 
 To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh × usable_fraction / 100)`
 

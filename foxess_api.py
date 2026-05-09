@@ -96,3 +96,26 @@ def get_battery_soc(sn: str) -> float | None:
         notify_warning(f"Failed to read SOC: {e}")
         print(f"Warning: failed to read SOC ({e})")
     return None
+
+
+def get_device_data(sn: str) -> tuple[float | None, float | None]:
+    """Return (soc%, pv_kw) in a single API call, or (None, None) on failure.
+
+    PV variable assumed to be 'pvPower' — verify against actual API response
+    and update if needed (e.g. 'generationPower').
+    """
+    try:
+        data   = _post("/op/v0/device/real/query", {"sn": sn, "variables": ["SoC", "pvPower"]})
+        result = data.get("result", [])
+        if not result:
+            return None, None
+        datas  = result[0].get("datas", [])
+        values = {d["variable"]: float(d.get("value", 0)) for d in datas if "variable" in d}
+        soc    = values.get("SoC")
+        pv_kw  = values.get("pvPower")
+        print(f"  SOC     : {soc:.1f}%  PV: {pv_kw:.2f} kW")
+        return soc, pv_kw
+    except Exception as e:
+        notify_warning(f"Failed to read device data: {e}")
+        print(f"Warning: failed to read device data ({e})")
+    return None, None

@@ -18,6 +18,15 @@ ACTIVE_HOUR_END   = int(os.getenv("FOXESS_ACTIVE_HOUR_END",   "21"))
 # before each window opens, regardless of which window times are configured.
 WINDOW_LEAD_MINUTES = int(os.getenv("FOXESS_WINDOW_LEAD_MINUTES", "3"))
 
+# ── Battery and charge parameters (used by dynamic strategy) ──────────────────
+# Used to calculate how long charging is needed based on current SOC and PV.
+# BATTERY_CHARGE_RATE_KW: max rate to battery (~5.63 kW — the rest covers house load)
+# BATTERY_KWH:            usable capacity
+# CHARGE_SAFETY_MARGIN:   multiplier added to calculated time (e.g. 1.15 = +15%)
+BATTERY_KWH           = float(os.getenv("FOXESS_BATTERY_KWH",           "9.4"))
+BATTERY_CHARGE_RATE_KW= float(os.getenv("FOXESS_BATTERY_CHARGE_RATE_KW","5.63"))
+CHARGE_SAFETY_MARGIN  = float(os.getenv("FOXESS_CHARGE_SAFETY_MARGIN",  "1.15"))
+
 # ── Tariff mode ───────────────────────────────────────────────────────────────
 # g13s   -> automatic Tauron G13s seasonal schedule (default)
 # manual -> use your own windows defined below

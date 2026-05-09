@@ -26,11 +26,14 @@ def is_not_opened_yet(now: datetime.datetime, start_time: str) -> bool:
     return minutes_until(now, start_time) > cfg.WINDOW_LEAD_MINUTES
 
 
-def near_window(now: datetime.datetime, strategy, low_solar: bool) -> bool:
+def near_window(now: datetime.datetime, strategy, ctx) -> bool:
     """Return True if now is within WINDOW_LEAD_MINUTES before either window
-    start, or inside the window itself."""
+    start, or inside the window itself.
+
+    ctx: ChargeContext passed to strategy.get_window1/get_window2.
+    """
     lead = cfg.WINDOW_LEAD_MINUTES
-    for start, end in (strategy.get_window1(low_solar), strategy.get_window2(low_solar)):
+    for start, end in (strategy.get_window1(ctx), strategy.get_window2(ctx)):
         mins   = minutes_until(now, start)
         h, m   = map(int, end.split(":"))
         end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
