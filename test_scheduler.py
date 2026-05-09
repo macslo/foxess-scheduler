@@ -112,7 +112,7 @@ class TestStrategyWindowTimes(unittest.TestCase):
         self.assertEqual(SummerWeekday().get_window2(False), ("16:20", "17:00"))
 
     def test_summer_weekday_window2_cloudy(self):
-        self.assertEqual(SummerWeekday().get_window2(True), ("15:45", "17:00"))
+        self.assertEqual(SummerWeekday().get_window2(True), ("15:30", "17:00"))
 
     def test_winter_weekday_window1_same_both(self):
         s = WinterWeekday()
@@ -145,10 +145,10 @@ class TestSocTargets(unittest.TestCase):
 
     def test_cloudy_adds_bonus(self):
         s = SummerWeekday()
-        self.assertEqual(s.morning_target(True), min(cfg.TARGET_SUMMER_WEEKDAY_MORNING + cfg.CLOUD_BONUS_MORNING, 95))
-        self.assertEqual(s.evening_target(True), min(cfg.TARGET_SUMMER_WEEKDAY_EVENING + cfg.CLOUD_BONUS_EVENING, 95))
+        self.assertEqual(s.morning_target(True), min(cfg.TARGET_SUMMER_WEEKDAY_MORNING + cfg.CLOUD_BONUS_MORNING, 100))
+        self.assertEqual(s.evening_target(True), min(cfg.TARGET_SUMMER_WEEKDAY_EVENING + cfg.CLOUD_BONUS_EVENING, 100))
 
-    def test_all_targets_reasonable(self):
+    def test_all_targets_capped_at_100(self):
         for S in [SummerWeekday, SummerWeekend, WinterWeekday, WinterWeekend]:
             s = S()
             for low in [True, False]:

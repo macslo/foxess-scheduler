@@ -65,11 +65,11 @@ class ChargeStrategy(ABC):
 
     def _m(self, base: int, low_solar: bool) -> int:
         bonus = cfg.CLOUD_BONUS_MORNING if low_solar else 0
-        return base + bonus
+        return min(base + bonus, 100)
 
     def _e(self, base: int, low_solar: bool) -> int:
         bonus = cfg.CLOUD_BONUS_EVENING if low_solar else 0
-        return base + bonus
+        return min(base + bonus, 100)
 
 
 # ── Summer strategies (1 Apr – 30 Sep) ───────────────────────────────────────
