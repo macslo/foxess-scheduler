@@ -111,6 +111,7 @@ class SummerWeekend(ChargeStrategy):
     def enable1(self): return False
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
+    # morning_target fixed at minimum — window is disabled, 10% is FoxESS system minimum
     def morning_target(self, ctx): return cfg.TARGET_SUMMER_WEEKEND_MORNING
     def evening_target(self, ctx): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, ctx)
 
@@ -204,7 +205,7 @@ class DynamicSummerWeekday(SummerWeekday):
         target = self.evening_target(ctx)
         start  = _dynamic_window2_start(ctx, end, target)
         if start is None:
-            return super().get_window2(ctx)  # fallback to static
+            return super().get_window2(ctx)
         return start, end
 
 
