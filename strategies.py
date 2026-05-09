@@ -201,7 +201,12 @@ class DynamicSummerWeekday(SummerWeekday):
     name = "G13s DYNAMIC SUMMER weekday"
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
-        end    = "17:00"
+        end   = "17:00"
+        now_h = datetime.datetime.now().hour
+        # Only calculate dynamically after 13:00 — before that PV data is not
+        # representative (dawn/morning values skew the net_rate calculation)
+        if now_h < 13 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window2(ctx)
         target = self.evening_target(ctx)
         start  = _dynamic_window2_start(ctx, end, target)
         if start is None:
@@ -213,7 +218,10 @@ class DynamicSummerWeekend(SummerWeekend):
     name = "G13s DYNAMIC SUMMER weekend"
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
-        end    = "17:00"
+        end   = "17:00"
+        now_h = datetime.datetime.now().hour
+        if now_h < 13 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window2(ctx)
         target = self.evening_target(ctx)
         start  = _dynamic_window2_start(ctx, end, target)
         if start is None:
@@ -225,7 +233,12 @@ class DynamicWinterWeekday(WinterWeekday):
     name = "G13s DYNAMIC WINTER weekday"
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
-        end    = "15:00"
+        end   = "15:00"
+        now_h = datetime.datetime.now().hour
+        # Winter window ends at 15:00 — start dynamic calc from 10:00
+        # (cheap midday rate starts, PV data more meaningful than morning)
+        if now_h < 10 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window2(ctx)
         target = self.evening_target(ctx)
         start  = _dynamic_window2_start(ctx, end, target)
         if start is None:
@@ -237,7 +250,10 @@ class DynamicWinterWeekend(WinterWeekend):
     name = "G13s DYNAMIC WINTER weekend"
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
-        end    = "15:00"
+        end   = "15:00"
+        now_h = datetime.datetime.now().hour
+        if now_h < 10 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window2(ctx)
         target = self.evening_target(ctx)
         start  = _dynamic_window2_start(ctx, end, target)
         if start is None:
