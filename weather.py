@@ -53,11 +53,21 @@ def get_solar_forecast(lat: float, lon: float) -> float:
     """Return average shortwave radiation (W/m²) relevant to the current decision.
 
     Before 09:00: sample 09:00-11:00 — first strong solar hours after morning peak.
-    After 09:00:  sample next 3 hours from now — reflects current conditions
-      for the evening window decision.
+    09:00-18:00:  sample next 3 hours from now — reflects current conditions.
+    After 18:00:  return SOLAR_GOOD — panels no longer producing regardless of
+                  forecast, no point fetching or adding cloud bonus to targets.
 
     Returns 999 (assume good solar) on forecast failure to avoid unnecessary charging.
     """
+    current_hour = datetime.datetime.now().hour
+
+    if current_hour >= 18:
+        print(f"  Solar   : skipped (after 18:00 — panels not producing)")
+        # Return SOLAR_GOOD to suppress cloud bonus — after 18:00 current SOC
+        # already reflects the full day's solar production, so forecast-based
+        # bonus is meaningless. Targets are set explicitly for evening windows.
+        return SOLAR_GOOD
+
     try:
         r = _fetch_with_retry("https://api.open-meteo.com/v1/forecast", params={
             "latitude":      lat,
@@ -73,7 +83,6 @@ def get_solar_forecast(lat: float, lon: float) -> float:
         r.raise_for_status()
         hourly = r.json()["hourly"]["shortwave_radiation"]
 
-        current_hour = datetime.datetime.now().hour
         if current_hour < 9:
             radiation = hourly[9:11]
             label     = "solar hours 09:00–11:00"
