@@ -105,7 +105,14 @@ class TestStrategyEnableLogic(unittest.TestCase):
         self.assertTrue(s.enable2())
 
     def test_summer_weekend_window1_disabled(self):
-        self.assertFalse(SummerWeekend().enable1())
+        """enable1 should be False on Saturday (not Sunday evening)."""
+        s = SummerWeekend()
+        # Use Saturday to avoid triggering Sunday evening logic
+        saturday = datetime.date(2025, 5, 10)  # known Saturday
+        fixed    = datetime.datetime.combine(saturday, datetime.time(10, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertFalse(s.enable1())
 
     def test_summer_weekend_window2_follows_config(self):
         self.assertEqual(SummerWeekend().enable2(), cfg.G13S_WEEKEND_MIDDAY)
@@ -587,6 +594,127 @@ class TestMinutesUntil(unittest.TestCase):
 
     def test_past(self):
         self.assertLess(windows.minutes_until(dt(10, 10), "10:00"), 0)
+
+
+
+# ── Charge state ──────────────────────────────────────────────────────────────
+class TestChargeState(unittest.TestCase):
+    """Tests for charge_state.py persistence module."""
+
+    def setUp(self):
+        """Clear state before each test."""
+        import charge_state as cs
+        self.cs = cs
+        cs.clear()
+
+    def tearDown(self):
+        """Always clean up after test."""
+        self.cs.clear()
+
+    def test_not_active_when_no_file(self):
+        """No state file → not active."""
+        self.assertFalse(self.cs.is_active(dt(20, 0)))
+
+    def test_active_before_end_time(self):
+        """Saved state with future end → active."""
+        self.cs.save("21:00")
+        self.assertTrue(self.cs.is_active(dt(20, 30)))
+
+    def test_not_active_after_end_time(self):
+        """Saved state with past end → not active, file cleaned up."""
+        self.cs.save("20:00")
+        self.assertFalse(self.cs.is_active(dt(21, 0)))
+        self.assertFalse(self.cs.STATE_FILE.exists())
+
+    def test_exactly_at_end_time_not_active(self):
+        """At exact end time → not active."""
+        self.cs.save("21:00")
+        self.assertFalse(self.cs.is_active(dt(21, 0)))
+
+    def test_clear_removes_file(self):
+        """clear() removes state file."""
+        self.cs.save("21:00")
+        self.assertTrue(self.cs.STATE_FILE.exists())
+        self.cs.clear()
+        self.assertFalse(self.cs.STATE_FILE.exists())
+
+    def test_clear_when_no_file_is_safe(self):
+        """clear() with no file doesn't raise."""
+        self.cs.clear()  # no file exists — should not raise
+        self.cs.clear()  # second call also safe
+
+    def test_corrupted_file_returns_false(self):
+        """Corrupted state file → not active, no crash."""
+        self.cs.STATE_FILE.write_text("not valid json {{{")
+        self.assertFalse(self.cs.is_active(dt(20, 0)))
+
+    def test_save_overwrites_previous(self):
+        """Saving new state overwrites old."""
+        self.cs.save("17:00")
+        self.cs.save("21:00")
+        self.assertTrue(self.cs.is_active(dt(20, 0)))
+
+
+# ── Charge state — Sunday evening scenario ────────────────────────────────────
+class TestChargeStateSundayScenario(unittest.TestCase):
+    """End-to-end charge state logic for Sunday evening window."""
+
+    def setUp(self):
+        import charge_state as cs
+        self.cs = cs
+        cs.clear()
+
+    def tearDown(self):
+        self.cs.clear()
+
+    def test_sunday_window_saved_at_target_100(self):
+        """When Sunday evening window enabled with target=100, state is saved."""
+        # Simulate: window 1 enabled (20:00-21:00), target=100
+        self.cs.save("21:00")
+        # At 20:15 — should be active (skip API calls)
+        self.assertTrue(self.cs.is_active(dt(20, 15)))
+
+    def test_sunday_window_expired_at_2100(self):
+        """State clears automatically after 21:00."""
+        self.cs.save("21:00")
+        self.assertFalse(self.cs.is_active(dt(21, 1)))
+        self.assertFalse(self.cs.STATE_FILE.exists())
+
+    def test_no_state_saved_at_target_85(self):
+        """For target=85%, state should NOT be saved — must keep checking SOC."""
+        # At 85% target we don't call charge_state.save() — verify it stays empty
+        # (This tests the logic in main — no save → is_active returns False)
+        self.assertFalse(self.cs.is_active(dt(16, 30)))
+
+    def test_full_sunday_timeline(self):
+        """Simulate full Sunday evening: enable at 20:00, skip at 20:15, clear at 21:01."""
+        # 20:00 — window enabled, state saved
+        self.cs.save("21:00")
+
+        # 20:02, 20:04 ... — skip (active)
+        for minute in [2, 15, 30, 45, 58]:
+            self.assertTrue(self.cs.is_active(dt(20, minute)),
+                            f"Should be active at 20:{minute:02d}")
+
+        # 21:01 — window ended, state cleared
+        self.assertFalse(self.cs.is_active(dt(21, 1)))
+        self.assertFalse(self.cs.STATE_FILE.exists())
+
+    def test_monday_morning_not_affected(self):
+        """State with end=21:00 is inactive at any time after 21:00 same day."""
+        self.cs.save("21:00")
+        # 21:01 same day — past end time, state cleared
+        self.assertFalse(self.cs.is_active(dt(21, 1)))
+        # After clear, subsequent calls also return False
+        self.assertFalse(self.cs.is_active(dt(21, 30)))
+
+    def test_state_survives_multiple_reads(self):
+        """Reading state multiple times doesn't corrupt it."""
+        self.cs.save("21:00")
+        for _ in range(5):
+            self.assertTrue(self.cs.is_active(dt(20, 30)))
+        # Still active after multiple reads
+        self.assertTrue(self.cs.STATE_FILE.exists())
 
 
 if __name__ == "__main__":
