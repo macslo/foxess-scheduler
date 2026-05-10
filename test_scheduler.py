@@ -157,7 +157,77 @@ class TestStrategyWindowTimes(unittest.TestCase):
 
 # ── Dynamic window times ──────────────────────────────────────────────────────
 # ── Dynamic window times ──────────────────────────────────────────────────────
-class TestDynamicWindowTimes(unittest.TestCase):
+class TestSundayEveningWindow(unittest.TestCase):
+    """Sunday evening repurposes window 1 slot for pre-Monday top-up (20:00-21:00)."""
+
+    def _sunday(self):
+        """Return a Sunday date."""
+        d = datetime.date.today()
+        # Find next Sunday
+        days_ahead = 6 - d.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        return d + datetime.timedelta(days=days_ahead)
+
+    def test_sunday_evening_enable1_true(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=20, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertTrue(s.enable1())
+
+    def test_sunday_morning_enable1_false(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=10, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertFalse(s.enable1())
+
+    def test_saturday_evening_enable1_false(self):
+        s   = SummerWeekend()
+        sat = self._sunday() - datetime.timedelta(days=1)
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=20, minute=0)
+            mock_dt.date.today.return_value   = sat
+            self.assertFalse(s.enable1())
+
+    def test_sunday_evening_window1_is_2000_2100(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=20, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertEqual(s.get_window1(ctx()), ("20:00", "21:00"))
+
+    def test_sunday_morning_window1_is_normal(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=10, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertEqual(s.get_window1(ctx()), ("06:50", "07:00"))
+
+    def test_sunday_evening_morning_target_100(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=20, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertEqual(s.morning_target(ctx()), 100)
+
+    def test_sunday_morning_target_is_minimum(self):
+        s = SummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=10, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertEqual(s.morning_target(ctx()), cfg.TARGET_SUMMER_WEEKEND_MORNING)
+
+    def test_dynamic_inherits_sunday_evening(self):
+        """DynamicSummerWeekend should also get Sunday evening window."""
+        s = DynamicSummerWeekend()
+        with patch('strategies.datetime') as mock_dt:
+            mock_dt.datetime.now.return_value = datetime.datetime.now().replace(hour=20, minute=0)
+            mock_dt.date.today.return_value   = self._sunday()
+            self.assertTrue(s.enable1())
+            self.assertEqual(s.get_window1(ctx()), ("20:00", "21:00"))
+            self.assertEqual(s.morning_target(ctx()), 100)
 
     # ── Time guard ────────────────────────────────────────────────────────────
 
@@ -294,6 +364,93 @@ class TestDynamicWindowTimes(unittest.TestCase):
         with patch_hour(11):
             _, end = s.get_window2(c)
             self.assertEqual(end, "15:00")
+
+
+# ── Sunday evening window ─────────────────────────────────────────────────────
+class TestSundayEveningWindow(unittest.TestCase):
+
+    def _sunday(self):
+        """Return a Sunday date."""
+        d = datetime.date.today()
+        # Find next Sunday
+        days_ahead = 6 - d.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        return d + datetime.timedelta(days=days_ahead)
+
+    def test_sunday_evening_enable1_true(self):
+        """enable1 should be True on Sunday after 19:00."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(20, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertTrue(s.enable1())
+
+    def test_sunday_morning_enable1_false(self):
+        """enable1 should be False on Sunday morning."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(10, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertFalse(s.enable1())
+
+    def test_saturday_evening_enable1_false(self):
+        """enable1 should be False on Saturday evening — only Sunday."""
+        s = SummerWeekend()
+        sunday   = self._sunday()
+        saturday = sunday - datetime.timedelta(days=1)
+        fixed    = datetime.datetime.combine(saturday, datetime.time(20, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertFalse(s.enable1())
+
+    def test_sunday_evening_window1_is_2000_2100(self):
+        """Window 1 should be 20:00-21:00 on Sunday evening."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(20, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertEqual(s.get_window1(ctx()), ("20:00", "21:00"))
+
+    def test_sunday_morning_window1_is_default(self):
+        """Window 1 should be default (disabled slot) on Sunday morning."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(10, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertEqual(s.get_window1(ctx()), ("06:50", "07:00"))
+
+    def test_sunday_evening_morning_target_is_100(self):
+        """morning_target should be 100% on Sunday evening."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(20, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertEqual(s.morning_target(ctx()), 100)
+
+    def test_sunday_morning_target_is_minimum(self):
+        """morning_target should be system minimum on Sunday morning."""
+        s = SummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(10, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertEqual(s.morning_target(ctx()), cfg.TARGET_SUMMER_WEEKEND_MORNING)
+
+    def test_dynamic_sunday_inherits_evening_window(self):
+        """DynamicSummerWeekend should inherit Sunday evening window 1."""
+        s = DynamicSummerWeekend()
+        sunday = self._sunday()
+        fixed  = datetime.datetime.combine(sunday, datetime.time(20, 0))
+        with patch.object(_strategies_module.datetime, 'datetime', wraps=datetime.datetime) as m:
+            m.now.return_value = fixed
+            self.assertEqual(s.get_window1(ctx()), ("20:00", "21:00"))
+            self.assertTrue(s.enable1())
 
 
 # ── SOC targets ───────────────────────────────────────────────────────────────

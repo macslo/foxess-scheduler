@@ -103,16 +103,35 @@ class SummerWeekday(ChargeStrategy):
 
 class SummerWeekend(ChargeStrategy):
     name              = "G13s SUMMER weekend"
-    window1           = ("06:50", "07:00")   # disabled — no peak on weekends
-    window1_low_solar = ("06:50", "07:00")   # disabled — no peak on weekends
+    window1           = ("06:50", "07:00")   # disabled normally — no peak on weekends
+    window1_low_solar = ("06:50", "07:00")   # disabled normally
     window2           = ("16:20", "17:00")   # disabled by default
     window2_low_solar = ("15:30", "17:00")
 
-    def enable1(self): return False
+    def _is_sunday_evening(self) -> bool:
+        now = datetime.datetime.now()
+        return now.date().weekday() == 6 and now.hour >= 19
+
+    def enable1(self) -> bool:
+        # Sunday evening: repurpose window 1 slot for pre-Monday top-up (20:00–21:00)
+        # Enabled regardless of solar — want 100% before Monday peak regardless
+        return self._is_sunday_evening()
+
     def enable2(self): return cfg.G13S_WEEKEND_MIDDAY
 
-    # morning_target fixed at minimum — window is disabled, 10% is FoxESS system minimum
-    def morning_target(self, ctx): return cfg.TARGET_SUMMER_WEEKEND_MORNING
+    def get_window1(self, ctx: ChargeContext) -> tuple[str, str]:
+        # Sunday evening: use window 1 slot for 20:00-21:00 top-up
+        if self._is_sunday_evening():
+            return ("20:00", "21:00")
+        return self.window1
+
+    # morning_target fixed at minimum normally — window disabled except Sunday evening
+    # Sunday evening: always charge to 100% regardless of solar
+    def morning_target(self, ctx: ChargeContext) -> int:
+        if self._is_sunday_evening():
+            return 100
+        return cfg.TARGET_SUMMER_WEEKEND_MORNING
+
     def evening_target(self, ctx): return self._e(cfg.TARGET_SUMMER_WEEKEND_EVENING, ctx)
 
 
@@ -216,6 +235,8 @@ class DynamicSummerWeekday(SummerWeekday):
 
 class DynamicSummerWeekend(SummerWeekend):
     name = "G13s DYNAMIC SUMMER weekend"
+    # Inherits Sunday evening window 1 (20:00-21:00) logic from SummerWeekend.
+    # Only get_window2 is dynamic here.
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
         end   = "17:00"
