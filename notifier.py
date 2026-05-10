@@ -18,6 +18,14 @@ COLOR_YELLOW = 0xf1c40f
 COLOR_RED    = 0xe74c3c
 
 
+def _solar_label(radiation: float, low_solar: bool) -> str:
+    """Human-readable solar forecast label for Discord embed."""
+    if datetime.datetime.now().hour >= 18:
+        return "⏭ skipped (after 18:00)"
+    bonus = "  ☁️ +bonus" if low_solar else "  ☀️"
+    return f"{radiation:.0f} W/m²{bonus}"
+
+
 def _send(payload: dict):
     if not WEBHOOK_URL:
         return
@@ -59,7 +67,7 @@ def notify_run(
     if not WEBHOOK_URL or not changed:
         return
 
-    solar_label = f"{radiation:.0f} W/m²{'  ☁️ +bonus' if low_solar else '  ☀️'}"
+    solar_label = _solar_label(radiation, low_solar)
     any_enabled = enable1 or enable2
     color       = COLOR_YELLOW if any_enabled else COLOR_GREEN
     icon        = "⚡" if any_enabled else "🌞"
