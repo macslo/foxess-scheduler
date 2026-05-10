@@ -106,6 +106,10 @@ FOXESS_API_KEY=your_api_key_here
 # Device serial — leave as "auto" to detect automatically
 FOXESS_SN=auto
 
+# Tariff mode — controls charging strategy (default: g13s_dynamic)
+# See "Tariff modes" section below for full description
+FOXESS_TARIFF=g13s_dynamic
+
 # Your location for solar forecast
 # Default in config.py is Gliwice, Poland
 FOXESS_LAT=50.XXXX
@@ -115,6 +119,14 @@ FOXESS_LON=18.XXXX
 # Discord channel → Edit → Integrations → Webhooks → New Webhook → Copy URL
 FOXESS_DISCORD_WEBHOOK=
 ```
+
+### Tariff modes
+
+| Value | Description |
+|-------|-------------|
+| `g13s_dynamic` | **Default. Recommended.** Tauron G13s with dynamic evening window. Calculates window 2 start time from current SOC + PV output at runtime. Falls back to static windows before afternoon or when data is unavailable. |
+| `g13s` | Tauron G13s with fixed windows based on solar forecast only. Simpler — no PV reading needed. Use if `pvPower` is unavailable on your inverter model. |
+| `manual` | User-defined windows via `FOXESS_CHARGE1_*` / `FOXESS_CHARGE2_*` vars. No SOC targets, no solar logic — windows follow enable policy only. |
 
 ### `config.py` — all tunable settings, committed to repo
 
@@ -131,7 +143,7 @@ WINDOW_LEAD_MINUTES = 3
 # SOC targets — minimum % before each peak block
 TARGET_SUMMER_WEEKDAY_MORNING = 15   # 1h peak, low usage
 TARGET_SUMMER_WEEKDAY_EVENING = 85   # goal: near-full before night
-TARGET_SUMMER_WEEKEND_MORNING = 10
+TARGET_SUMMER_WEEKEND_MORNING = 10   # window disabled — FoxESS system minimum
 TARGET_SUMMER_WEEKEND_EVENING = 85
 TARGET_WINTER_WEEKDAY_MORNING = 65   # 3h peak
 TARGET_WINTER_WEEKDAY_EVENING = 95   # 6h peak — worst block
@@ -140,9 +152,14 @@ TARGET_WINTER_WEEKEND_EVENING = 85
 
 # Cloud bonus — added to targets when solar forecast is poor (shortwave radiation W/m²)
 # Morning: low usage regardless of weather — small bonus
-# Evening: pushes target to 95% cap on cloudy days (85 + 15 = 100, capped at 95)
+# Evening: pushes target to 100% on cloudy days (85 + 15 = 100)
 CLOUD_BONUS_MORNING = 10
 CLOUD_BONUS_EVENING = 15
+
+# Dynamic strategy parameters (g13s_dynamic only)
+BATTERY_KWH            = 9.4    # usable battery capacity
+BATTERY_CHARGE_RATE_KW = 5.63   # net rate to battery (grid rate minus house load)
+CHARGE_SAFETY_MARGIN   = 1.15   # +15% margin on calculated charge time
 ```
 
 All `config.py` values can be overridden in `.env` using the `FOXESS_` prefix.

@@ -28,9 +28,21 @@ BATTERY_CHARGE_RATE_KW= float(os.getenv("FOXESS_BATTERY_CHARGE_RATE_KW","5.63"))
 CHARGE_SAFETY_MARGIN  = float(os.getenv("FOXESS_CHARGE_SAFETY_MARGIN",  "1.15"))
 
 # ── Tariff mode ───────────────────────────────────────────────────────────────
-# g13s   -> automatic Tauron G13s seasonal schedule (default)
-# manual -> use your own windows defined below
-TARIFF = os.getenv("FOXESS_TARIFF", "g13s").strip().lower()
+# Controls which charging strategy is used.
+#
+# g13s_dynamic (default) — Tauron G13s with dynamic evening window.
+#   Calculates window 2 start time from current SOC and PV output at runtime.
+#   Falls back to static windows when data is unavailable or before afternoon.
+#   Best choice for most installations.
+#
+# g13s — Tauron G13s with fixed windows based on solar forecast only.
+#   Simpler, no PV reading needed. Windows sized for worst-case scenarios.
+#   Use if pvPower API variable is unavailable on your inverter.
+#
+# manual — User-defined windows from FOXESS_CHARGE1_*/FOXESS_CHARGE2_* vars.
+#   No SOC targets, no solar logic — windows follow enable policy only.
+#
+TARIFF = os.getenv("FOXESS_TARIFF", "g13s_dynamic").strip().lower()
 
 # ── Manual windows (only used when TARIFF=manual) ─────────────────────────────
 # FOXESS_CHARGE1_ENABLE / FOXESS_CHARGE2_ENABLE: always | never | weekdays | weekends
@@ -83,7 +95,7 @@ G13S_WEEKEND_MIDDAY = os.getenv("FOXESS_G13S_WEEKEND_MIDDAY", "false").strip().l
 # Weekend targets are lower — no true peak, only neutral rates apply.
 TARGET_SUMMER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_MORNING", "15"))  # 1h peak × 1kW / 0.0846
 TARGET_SUMMER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKDAY_EVENING", "85"))
-TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "10"))
+TARGET_SUMMER_WEEKEND_MORNING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_MORNING", "15"))
 TARGET_SUMMER_WEEKEND_EVENING = int(os.getenv("FOXESS_TARGET_SUMMER_WEEKEND_EVENING", "85"))
 TARGET_WINTER_WEEKDAY_MORNING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_MORNING", "65"))
 TARGET_WINTER_WEEKDAY_EVENING = int(os.getenv("FOXESS_TARGET_WINTER_WEEKDAY_EVENING", "95"))
