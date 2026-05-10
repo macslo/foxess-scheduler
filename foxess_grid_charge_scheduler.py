@@ -31,7 +31,7 @@ load_dotenv(env_path)
 # ── Secrets (from .env only) ──────────────────────────────────────────────────
 API_KEY      = os.getenv("FOXESS_API_KEY", "")
 DEVICE_SN    = os.getenv("FOXESS_SN", "")
-FORECAST_LAT = float(os.getenv("FOXESS_LAT", "50.2849"))  # default: Gliwice
+FORECAST_LAT = float(os.getenv("FOXESS_LAT", "50.2849"))
 FORECAST_LON = float(os.getenv("FOXESS_LON", "18.6717"))
 
 # ── Modules ───────────────────────────────────────────────────────────────────
@@ -41,6 +41,7 @@ import windows
 import strategies
 import notifier
 import weather
+import charge_state
 from context import ChargeContext
 
 api.API_KEY = API_KEY
@@ -55,6 +56,12 @@ def main():
     # ── Skip outside active hours ─────────────────────────────────────────────
     if not force and not (cfg.ACTIVE_HOUR_START <= now.hour < cfg.ACTIVE_HOUR_END):
         print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
+        sys.exit(0)
+
+    # ── Skip if window is already active — FoxESS manages charge internally ──
+    # Avoids API calls and oscillating notifications (99%↔100%) while charging.
+    if not force and charge_state.is_active(now):
+        print(f"[SKIP] charge window active — FoxESS managing charge internally")
         sys.exit(0)
 
     # ── Get strategy ──────────────────────────────────────────────────────────
@@ -157,6 +164,22 @@ def main():
             print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
                   f"window2={'ENABLED' if enable2 else 'DISABLED'}")
             changed = True
+
+            # ── Persist charge state ──────────────────────────────────────────
+            # Only skip subsequent runs when target is 100% — FoxESS handles
+            # the charge limit itself and will stop naturally.
+            # For other targets (e.g. 85%) we keep checking SOC every 2 min
+            # so we can disable the window when the target is reached.
+            if enable1 and not enable2 and morning_target == 100:
+                charge_state.save(end1)
+            elif enable2 and not enable1 and evening_target == 100:
+                charge_state.save(end2)
+            elif enable1 and enable2:
+                if morning_target == 100 and evening_target == 100:
+                    charge_state.save(max(end1, end2))
+            else:
+                # Windows disabled or target < 100% — clear any saved state
+                charge_state.clear()
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)

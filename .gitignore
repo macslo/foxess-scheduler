@@ -1,2 +1,17 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Secrets — never commit
+.env
+ 
+# Runtime state files
+.charge_state
+ 
+# macOS
+.DS_Store
+ 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+ 
+# Logs
+*.log
+ 
