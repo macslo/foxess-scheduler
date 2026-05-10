@@ -17,13 +17,34 @@ from strategies import (
     get_strategy,
     SummerWeekday, SummerWeekend,
     WinterWeekday, WinterWeekend,
-    DynamicSummerWeekday, DynamicWinterWeekday,
+    DynamicSummerWeekday, DynamicSummerWeekend,
+    DynamicWinterWeekday, DynamicWinterWeekend,
     ManualStrategy,
 )
 from context import ChargeContext
 from weather import is_low_solar, SOLAR_GOOD, SOLAR_POOR
 import windows
 import config as cfg
+from unittest.mock import patch
+import strategies as _strategies_module
+
+
+class patch_hour:
+    """Context manager to mock datetime.datetime.now().hour in strategies."""
+    def __init__(self, hour):
+        self.hour = hour
+        self._patcher = None
+
+    def __enter__(self):
+        fixed = datetime.datetime.now().replace(hour=self.hour, minute=0)
+        self._patcher = patch.object(_strategies_module.datetime, 'datetime',
+                                     wraps=datetime.datetime)
+        mock_dt = self._patcher.start()
+        mock_dt.now.return_value = fixed
+        return self
+
+    def __exit__(self, *args):
+        self._patcher.stop()
 
 
 def dt(h, m=0):
@@ -135,37 +156,144 @@ class TestStrategyWindowTimes(unittest.TestCase):
 
 
 # ── Dynamic window times ──────────────────────────────────────────────────────
+# ── Dynamic window times ──────────────────────────────────────────────────────
 class TestDynamicWindowTimes(unittest.TestCase):
 
-    def test_dynamic_with_low_soc_starts_earlier(self):
-        s       = DynamicSummerWeekday()
-        low_soc = ctx(low_solar=True, soc=10.0, pv_kw=0.5)
-        high_soc= ctx(low_solar=True, soc=80.0, pv_kw=0.5)
-        start_low,  _ = s.get_window2(low_soc)
-        start_high, _ = s.get_window2(high_soc)
-        self.assertLessEqual(start_low, start_high)
+    # ── Time guard ────────────────────────────────────────────────────────────
 
-    def test_dynamic_falls_back_when_soc_none(self):
-        s   = DynamicSummerWeekday()
-        c   = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=False)
-        # Should return static cloudy window as fallback
-        self.assertEqual(s.get_window2(c), ("15:30", "17:00"))
-
-    def test_dynamic_at_target_uses_static(self):
+    def test_summer_before_13_uses_static_cloudy(self):
+        """Before 13:00 dynamic should fall back to static cloudy window."""
         s = DynamicSummerWeekday()
-        # SOC already above target — no charging needed, returns static
-        c = ctx(low_solar=False, soc=99.0, pv_kw=3.0)
-        self.assertEqual(s.get_window2(c), ("16:20", "17:00"))
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5)
+        with patch_hour(12):
+            self.assertEqual(s.get_window2(c), ("15:30", "17:00"))
 
-    def test_dynamic_high_pv_starts_later(self):
-        """High PV reduces net charge rate → more time needed → earlier start."""
-        s        = DynamicSummerWeekday()
-        low_pv   = ctx(low_solar=True, soc=20.0, pv_kw=0.5)
-        high_pv  = ctx(low_solar=True, soc=20.0, pv_kw=4.0)
-        start_low,  _ = s.get_window2(low_pv)
-        start_high, _ = s.get_window2(high_pv)
-        # High PV means less net rate to battery → needs longer → starts earlier
-        self.assertLessEqual(start_high, start_low)
+    def test_summer_before_13_uses_static_clear(self):
+        """Before 13:00 dynamic should fall back to static clear window."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=20.0, pv_kw=2.0)
+        with patch_hour(8):
+            self.assertEqual(s.get_window2(c), ("16:20", "17:00"))
+
+    def test_summer_after_13_uses_dynamic(self):
+        """After 13:00 with full context should return dynamic start."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5)
+        with patch_hour(14):
+            start, end = s.get_window2(c)
+            self.assertEqual(end, "17:00")
+            self.assertNotEqual(start, "15:30")   # not static
+            self.assertNotEqual(start, "16:20")   # not static
+
+    def test_winter_before_10_uses_static(self):
+        """Before 10:00 winter dynamic should fall back to static."""
+        s = DynamicWinterWeekday()
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5, winter=True)
+        with patch_hour(9):
+            self.assertEqual(s.get_window2(c), ("13:00", "15:00"))
+
+    def test_winter_after_10_uses_dynamic(self):
+        """After 10:00 winter dynamic should calculate start."""
+        s = DynamicWinterWeekday()
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5, winter=True)
+        with patch_hour(11):
+            start, end = s.get_window2(c)
+            self.assertEqual(end, "15:00")
+            self.assertNotEqual(start, "13:00")   # not static
+
+    # ── Fallback conditions ───────────────────────────────────────────────────
+
+    def test_falls_back_when_soc_none(self):
+        s = DynamicSummerWeekday()
+        c = ChargeContext(low_solar=True, soc=None, pv_kw=0.5, winter=False)
+        with patch_hour(14):
+            self.assertEqual(s.get_window2(c), ("15:30", "17:00"))
+
+    def test_falls_back_when_pv_none(self):
+        s = DynamicSummerWeekday()
+        c = ChargeContext(low_solar=True, soc=20.0, pv_kw=None, winter=False)
+        with patch_hour(14):
+            self.assertEqual(s.get_window2(c), ("15:30", "17:00"))
+
+    def test_falls_back_when_soc_at_target(self):
+        """SOC already at or above target — no charging needed → static."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=99.0, pv_kw=3.0)
+        with patch_hour(14):
+            self.assertEqual(s.get_window2(c), ("16:20", "17:00"))
+
+    # ── Realistic scenarios ───────────────────────────────────────────────────
+
+    def test_low_soc_low_pv_starts_early(self):
+        """Low SOC + low PV → long charge needed → early start."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=True, soc=10.0, pv_kw=0.1)
+        with patch_hour(14):
+            start, _ = s.get_window2(c)
+            # Should start well before 16:20
+            h, m = map(int, start.split(":"))
+            self.assertLess(h * 60 + m, 16 * 60 + 20)
+
+    def test_high_soc_starts_late(self):
+        """High SOC → little charging needed → late start."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=75.0, pv_kw=1.0)
+        with patch_hour(14):
+            start, _ = s.get_window2(c)
+            h, m = map(int, start.split(":"))
+            # Should start close to 16:20 or later
+            self.assertGreaterEqual(h * 60 + m, 15 * 60 + 30)
+
+    def test_high_pv_starts_earlier_than_low_pv(self):
+        """High PV reduces net charge rate → needs more time → earlier start."""
+        s      = DynamicSummerWeekday()
+        low_pv = ctx(low_solar=True, soc=20.0, pv_kw=0.5)
+        hi_pv  = ctx(low_solar=True, soc=20.0, pv_kw=4.0)
+        with patch_hour(14):
+            start_low, _ = s.get_window2(low_pv)
+            start_hi,  _ = s.get_window2(hi_pv)
+            self.assertLessEqual(start_hi, start_low)
+
+    def test_today_scenario_soc10_pv056(self):
+        """Replays real data: SOC 10%, PV 0.56 kW, should start before 15:30."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=True, soc=10.0, pv_kw=0.56)
+        with patch_hour(14):
+            start, end = s.get_window2(c)
+            self.assertEqual(end, "17:00")
+            h, m = map(int, start.split(":"))
+            # Real scenario needed ~101 min → start ~15:09 — must be before 15:30
+            self.assertLess(h * 60 + m, 15 * 60 + 30)
+
+    # ── Boundary / edge cases ─────────────────────────────────────────────────
+
+    def test_start_never_before_0600(self):
+        """Very low SOC + very low PV should not start before 06:00."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=True, soc=1.0, pv_kw=0.01)
+        with patch_hour(14):
+            start, _ = s.get_window2(c)
+            h, m = map(int, start.split(":"))
+            self.assertGreaterEqual(h * 60 + m, 6 * 60)
+
+    def test_dynamic_weekend_disabled_enable2_false(self):
+        """Weekend dynamic — enable2=False so window doesn't matter, but
+        get_window2 should still return a valid tuple."""
+        s = DynamicSummerWeekend()
+        self.assertFalse(s.enable2())   # window is off
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5)
+        with patch_hour(14):
+            start, end = s.get_window2(c)
+            self.assertEqual(end, "17:00")
+            self.assertIsInstance(start, str)
+
+    def test_winter_dynamic_end_time_correct(self):
+        """Winter dynamic end time must be 15:00 not 17:00."""
+        s = DynamicWinterWeekday()
+        c = ctx(low_solar=True, soc=20.0, pv_kw=0.5, winter=True)
+        with patch_hour(11):
+            _, end = s.get_window2(c)
+            self.assertEqual(end, "15:00")
 
 
 # ── SOC targets ───────────────────────────────────────────────────────────────
