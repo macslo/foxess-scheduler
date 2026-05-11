@@ -153,8 +153,23 @@ def main():
         already1 = cur.get("enable1")
         already2 = cur.get("enable2")
 
-        if enable1 is None: enable1 = already1
-        if enable2 is None: enable2 = already2
+        if enable1 is None:
+            enable1 = already1
+            # Use current times from API — don't overwrite with freshly calculated times
+            cur_s1 = cur.get("startTime1", {})
+            cur_e1 = cur.get("endTime1", {})
+            if cur_s1 and cur_e1:
+                start1 = f"{cur_s1.get('hour', 0):02d}:{cur_s1.get('minute', 0):02d}"
+                end1   = f"{cur_e1.get('hour', 0):02d}:{cur_e1.get('minute', 0):02d}"
+
+        if enable2 is None:
+            enable2 = already2
+            # Use current times from API — don't overwrite with freshly calculated times
+            cur_s2 = cur.get("startTime2", {})
+            cur_e2 = cur.get("endTime2", {})
+            if cur_s2 and cur_e2:
+                start2 = f"{cur_s2.get('hour', 0):02d}:{cur_s2.get('minute', 0):02d}"
+                end2   = f"{cur_e2.get('hour', 0):02d}:{cur_e2.get('minute', 0):02d}"
 
         print(f"  Current : window1={already1}  window2={already2}")
         if already1 == enable1 and already2 == enable2:
