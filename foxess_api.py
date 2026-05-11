@@ -6,13 +6,12 @@ and charge window get/set.
 """
 import hashlib
 import time
+import random
 import requests
 from notifier import notify_warning
 
 BASE_URL = "https://www.foxesscloud.com"
-
-# Set by main script after loading .env
-API_KEY = ""
+API_KEY  = ""
 
 
 def _headers(path: str) -> dict:
@@ -28,22 +27,31 @@ def _headers(path: str) -> dict:
     }
 
 
+def _request_with_retry(method: str, path: str, retries: int = 3, **kwargs) -> dict:
+    """GET or POST with exponential backoff + jitter on failure."""
+    url = BASE_URL + path
+    for i in range(retries):
+        try:
+            r = requests.request(method, url, headers=_headers(path), **kwargs)
+            r.raise_for_status()
+            d = r.json()
+            if d.get("errno", 0) != 0:
+                raise RuntimeError(f"API [{d.get('errno')}]: {d.get('msg', d)}")
+            return d
+        except Exception as e:
+            if i == retries - 1:
+                raise
+            wait = (2 ** i) + random.uniform(0, 1)
+            print(f"[foxess_api] {method} {path} failed ({e}), retry {i+1}/{retries} in {wait:.1f}s")
+            time.sleep(wait)
+
+
 def _get(path: str, params=None) -> dict:
-    r = requests.get(BASE_URL + path, headers=_headers(path), params=params, timeout=15)
-    r.raise_for_status()
-    d = r.json()
-    if d.get("errno", 0) != 0:
-        raise RuntimeError(f"API [{d.get('errno')}]: {d.get('msg', d)}")
-    return d
+    return _request_with_retry("GET", path, params=params, timeout=(5, 15))
 
 
 def _post(path: str, body: dict) -> dict:
-    r = requests.post(BASE_URL + path, headers=_headers(path), json=body, timeout=15)
-    r.raise_for_status()
-    d = r.json()
-    if d.get("errno", 0) != 0:
-        raise RuntimeError(f"API [{d.get('errno')}]: {d.get('msg', d)}")
-    return d
+    return _request_with_retry("POST", path, json=body, timeout=(5, 20))
 
 
 def get_first_sn() -> str:

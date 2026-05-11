@@ -32,7 +32,7 @@ def _fetch_with_retry(url, params, retries=5):
 
     for i in range(retries):
         try:
-            r = requests.get(url, params=params, timeout=10)
+            r = requests.get(url, params=params, timeout=(3, 10))
             if r.status_code == 200:
                 return r
             if 500 <= r.status_code < 600 or r.status_code == 429:
