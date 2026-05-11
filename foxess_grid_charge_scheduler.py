@@ -47,95 +47,190 @@ from context import ChargeContext
 api.API_KEY = API_KEY
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _should_skip_early(now: datetime.datetime, force: bool) -> bool:
+    """Return True and print reason if we should exit before any API calls."""
+    if not force and not (cfg.ACTIVE_HOUR_START <= now.hour < cfg.ACTIVE_HOUR_END):
+        print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
+        return True
+    if not force and charge_state.is_active(now):
+        print("[SKIP] charge window active — FoxESS managing charge internally")
+        return True
+    return False
+
+
+def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool) -> tuple:
+    """Two-phase proximity check. Returns (radiation, low_solar) or exits.
+
+    Phase 1: check against worst-case (earliest) windows — no API calls.
+    Phase 2: fetch solar forecast, recheck only if clear day (later windows).
+    """
+    ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
+    if not force and not windows.near_window(now, strategy, ctx_worst):
+        s1, e1 = strategy.get_window1(ctx_worst)
+        s2, e2 = strategy.get_window2(ctx_worst)
+        print(f"[SKIP] not near any window  (w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+        sys.exit(0)
+
+    radiation = weather.get_solar_forecast(FORECAST_LAT, FORECAST_LON)
+    low_solar = weather.is_low_solar(radiation, winter)
+
+    if not force and not low_solar:
+        ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
+        if not windows.near_window(now, strategy, ctx_clear):
+            s1, e1 = strategy.get_window1(ctx_clear)
+            s2, e2 = strategy.get_window2(ctx_clear)
+            print(f"[SKIP] not near any window after solar check  (w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+            sys.exit(0)
+
+    return radiation, low_solar
+
+
+def _resolve_sn() -> str:
+    """Return device SN from env or auto-detect via API."""
+    sn = DEVICE_SN
+    if not sn or sn.lower() == "auto":
+        print("FOXESS_SN not set -- auto-detecting...")
+        sn = api.get_first_sn()
+    return sn
+
+
+def _read_device(sn: str) -> tuple:
+    """Read SOC and PV from device. Returns (soc, pv_kw) with safe fallbacks."""
+    soc, pv_kw = api.get_device_data(sn)
+    if soc is None:
+        print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
+        soc = 0.0
+    if pv_kw is None:
+        print("PV unknown -- assuming 0 kW")
+        pv_kw = 0.0
+    return soc, pv_kw
+
+
+def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext) -> tuple:
+    """Determine window times, targets and enable flags from strategy + context.
+
+    Returns (start1, end1, enable1, start2, end2, enable2, morning_target, evening_target).
+    enable=None means frozen (outside active period).
+    """
+    start1, end1   = strategy.get_window1(ctx)
+    start2, end2   = strategy.get_window2(ctx)
+    morning_target = strategy.morning_target(ctx)
+    evening_target = strategy.evening_target(ctx)
+
+    enable1 = strategy.enable1() and (ctx.soc < morning_target)
+    enable2 = strategy.enable2() and (ctx.soc < evening_target)
+
+    if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
+        enable1 = None
+    if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
+        enable2 = None
+
+    return start1, end1, enable1, start2, end2, enable2, morning_target, evening_target
+
+
+def _apply(sn, now, ctx, strategy,
+           start1, end1, enable1,
+           start2, end2, enable2,
+           morning_target, evening_target,
+           radiation) -> None:
+    """Read current state, apply changes if needed, save state and notify."""
+    changed = False
+    try:
+        cur      = api.get_charge_settings(sn)
+        already1 = cur.get("enable1")
+        already2 = cur.get("enable2")
+
+        # Frozen windows keep their current enable state and API times
+        if enable1 is None:
+            enable1 = already1
+            s = cur.get("startTime1", {}); e = cur.get("endTime1", {})
+            if s and e:
+                start1 = f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}"
+                end1   = f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}"
+
+        if enable2 is None:
+            enable2 = already2
+            s = cur.get("startTime2", {}); e = cur.get("endTime2", {})
+            if s and e:
+                start2 = f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}"
+                end2   = f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}"
+
+        print(f"  Current : window1={already1}  window2={already2}")
+        if already1 == enable1 and already2 == enable2:
+            print("  Already correct -- nothing to do.")
+        else:
+            api.set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
+            print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
+                  f"window2={'ENABLED' if enable2 else 'DISABLED'}")
+            changed = True
+            _update_charge_state(enable1, enable2, end1, end2, morning_target, evening_target)
+
+    except Exception as e:
+        notifier.notify_error("Failed to read/set charge windows", e)
+        print(f"  Error: {e}")
+        return
+
+    notifier.notify_run(
+        sn=sn,
+        strategy_name=strategy.name,
+        soc=ctx.soc,
+        radiation=radiation,
+        low_solar=ctx.low_solar,
+        morning_target=morning_target,
+        evening_target=evening_target,
+        enable1=enable1, enable2=enable2,
+        start1=start1, end1=end1,
+        start2=start2, end2=end2,
+        changed=changed,
+    )
+
+
+def _update_charge_state(enable1, enable2, end1, end2, morning_target, evening_target):
+    """Save or clear charge state based on active windows and targets.
+
+    Only saves when target=100% — FoxESS handles the limit itself.
+    For targets < 100% (e.g. 85%) we keep checking SOC every 2 min.
+    """
+    if enable1 and not enable2 and morning_target == 100:
+        charge_state.save(end1)
+    elif enable2 and not enable1 and evening_target == 100:
+        charge_state.save(end2)
+    elif enable1 and enable2 and morning_target == 100 and evening_target == 100:
+        charge_state.save(max(end1, end2))
+    else:
+        charge_state.clear()
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     now   = datetime.datetime.now()
     force = "--force" in sys.argv
     print(f"[RUN] {now.isoformat()}{' [FORCED]' if force else ''}")
 
-    # ── Skip outside active hours ─────────────────────────────────────────────
-    if not force and not (cfg.ACTIVE_HOUR_START <= now.hour < cfg.ACTIVE_HOUR_END):
-        print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
+    if _should_skip_early(now, force):
         sys.exit(0)
 
-    # ── Skip if window is already active — FoxESS manages charge internally ──
-    # Avoids API calls and oscillating notifications (99%↔100%) while charging.
-    if not force and charge_state.is_active(now):
-        print(f"[SKIP] charge window active — FoxESS managing charge internally")
-        sys.exit(0)
-
-    # ── Get strategy ──────────────────────────────────────────────────────────
     today    = now.date()
     strategy = strategies.get_strategy(today, cfg.TARIFF)
     winter   = today.month >= 10 or today.month <= 3
 
-    # ── Build a minimal context for proximity checks (soc/pv unknown yet) ────
-    # Phase 1 uses low_solar=True (worst case = earliest windows).
-    # We don't have SOC/PV yet — dynamic strategies fall back to static windows.
-    ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
+    radiation, low_solar = _proximity_check(now, strategy, force, winter)
 
-    # ── Phase 1: quick proximity check — no API calls ─────────────────────────
-    if not force and not windows.near_window(now, strategy, ctx_worst):
-        s1, e1 = strategy.get_window1(ctx_worst)
-        s2, e2 = strategy.get_window2(ctx_worst)
-        print(f"[SKIP] not near any window  "
-              f"(w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-        sys.exit(0)
-
-    # ── Phase 2: fetch solar forecast ────────────────────────────────────────
-    radiation = weather.get_solar_forecast(FORECAST_LAT, FORECAST_LON)
-    low_solar = weather.is_low_solar(radiation, winter)
-
-    # Recheck with clear-day windows if not low_solar (they start later)
-    ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
-    if not force and not low_solar and not windows.near_window(now, strategy, ctx_clear):
-        s1, e1 = strategy.get_window1(ctx_clear)
-        s2, e2 = strategy.get_window2(ctx_clear)
-        print(f"[SKIP] not near any window after solar check  "
-              f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-        sys.exit(0)
-
-    # ── Validate API key ──────────────────────────────────────────────────────
     if not API_KEY:
         msg = "FOXESS_API_KEY is not set. Get your key at foxesscloud.com → Personal Centre → API Management"
         print(f"ERROR: {msg}")
         notifier.notify_error("Missing API key", Exception(msg))
         sys.exit(1)
 
-    # ── Resolve device SN ─────────────────────────────────────────────────────
-    sn = DEVICE_SN
-    if not sn or sn.lower() == "auto":
-        print("FOXESS_SN not set -- auto-detecting...")
-        sn = api.get_first_sn()
+    sn          = _resolve_sn()
+    soc, pv_kw  = _read_device(sn)
+    ctx         = ChargeContext(low_solar=low_solar, soc=soc, pv_kw=pv_kw, winter=winter)
 
-    # ── Read SOC and PV in one call ───────────────────────────────────────────
-    soc, pv_kw = api.get_device_data(sn)
-    if soc is None:
-        print("SOC unknown -- forcing SOC=0 (charging will be enabled)")
-        soc = 0
-    if pv_kw is None:
-        print("PV unknown -- assuming 0 kW")
-        pv_kw = 0.0
+    start1, end1, enable1, start2, end2, enable2, morning_target, evening_target = \
+        _evaluate_windows(now, strategy, ctx)
 
-    # ── Build full context ────────────────────────────────────────────────────
-    ctx = ChargeContext(low_solar=low_solar, soc=soc, pv_kw=pv_kw, winter=winter)
-
-    # ── Determine windows and targets ─────────────────────────────────────────
-    start1, end1   = strategy.get_window1(ctx)
-    start2, end2   = strategy.get_window2(ctx)
-    morning_target = strategy.morning_target(ctx)
-    evening_target = strategy.evening_target(ctx)
-
-    enable1 = strategy.enable1() and (soc < morning_target)
-    enable2 = strategy.enable2() and (soc < evening_target)
-
-    # ── Freeze windows outside their active period ────────────────────────────
-    if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
-        enable1 = None
-    if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
-        enable2 = None
-
-    # ── Report ────────────────────────────────────────────────────────────────
     print(f"FoxESS Grid Charge Scheduler")
     print(f"  Device  : {sn}")
     print(f"  Today   : {today.strftime('%A, %d %b %Y')}")
@@ -146,75 +241,11 @@ def main():
     print(f"  Window 2: {start2}–{end2}  -> {windows.window_status(now, enable2, start2, end2)}")
     print()
 
-    # ── Read current state and apply if needed ────────────────────────────────
-    changed = False
-    try:
-        cur      = api.get_charge_settings(sn)
-        already1 = cur.get("enable1")
-        already2 = cur.get("enable2")
-
-        if enable1 is None:
-            enable1 = already1
-            # Use current times from API — don't overwrite with freshly calculated times
-            cur_s1 = cur.get("startTime1", {})
-            cur_e1 = cur.get("endTime1", {})
-            if cur_s1 and cur_e1:
-                start1 = f"{cur_s1.get('hour', 0):02d}:{cur_s1.get('minute', 0):02d}"
-                end1   = f"{cur_e1.get('hour', 0):02d}:{cur_e1.get('minute', 0):02d}"
-
-        if enable2 is None:
-            enable2 = already2
-            # Use current times from API — don't overwrite with freshly calculated times
-            cur_s2 = cur.get("startTime2", {})
-            cur_e2 = cur.get("endTime2", {})
-            if cur_s2 and cur_e2:
-                start2 = f"{cur_s2.get('hour', 0):02d}:{cur_s2.get('minute', 0):02d}"
-                end2   = f"{cur_e2.get('hour', 0):02d}:{cur_e2.get('minute', 0):02d}"
-
-        print(f"  Current : window1={already1}  window2={already2}")
-        if already1 == enable1 and already2 == enable2:
-            print("  Already correct -- nothing to do.")
-        else:
-            api.set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
-            print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
-                  f"window2={'ENABLED' if enable2 else 'DISABLED'}")
-            changed = True
-
-            # ── Persist charge state ──────────────────────────────────────────
-            # Only skip subsequent runs when target is 100% — FoxESS handles
-            # the charge limit itself and will stop naturally.
-            # For other targets (e.g. 85%) we keep checking SOC every 2 min
-            # so we can disable the window when the target is reached.
-            if enable1 and not enable2 and morning_target == 100:
-                charge_state.save(end1)
-            elif enable2 and not enable1 and evening_target == 100:
-                charge_state.save(end2)
-            elif enable1 and enable2:
-                if morning_target == 100 and evening_target == 100:
-                    charge_state.save(max(end1, end2))
-            else:
-                # Windows disabled or target < 100% — clear any saved state
-                charge_state.clear()
-
-    except Exception as e:
-        notifier.notify_error("Failed to read/set charge windows", e)
-        print(f"  Error: {e}")
-        return
-
-    # ── Notify ────────────────────────────────────────────────────────────────
-    notifier.notify_run(
-        sn=sn,
-        strategy_name=strategy.name,
-        soc=soc,
-        radiation=radiation,
-        low_solar=low_solar,
-        morning_target=morning_target,
-        evening_target=evening_target,
-        enable1=enable1, enable2=enable2,
-        start1=start1, end1=end1,
-        start2=start2, end2=end2,
-        changed=changed,
-    )
+    _apply(sn, now, ctx, strategy,
+           start1, end1, enable1,
+           start2, end2, enable2,
+           morning_target, evening_target,
+           radiation)
 
 
 if __name__ == "__main__":
