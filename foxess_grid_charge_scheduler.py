@@ -158,9 +158,25 @@ def _apply(sn, now, ctx, strategy,
                 end2   = f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}"
 
         print(f"  Current : window1={already1}  window2={already2}")
-        if already1 == enable1 and already2 == enable2:
+
+        # Compare times from API with desired times
+        def _api_time(d: dict, key_start: str, key_end: str) -> tuple:
+            s = cur.get(key_start, {}); e = cur.get(key_end, {})
+            return (f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}",
+                    f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}")
+
+        cur_start1, cur_end1 = _api_time(cur, "startTime1", "endTime1")
+        cur_start2, cur_end2 = _api_time(cur, "startTime2", "endTime2")
+
+        times_match = (cur_start1 == start1 and cur_end1 == end1 and
+                       cur_start2 == start2 and cur_end2 == end2)
+
+        if already1 == enable1 and already2 == enable2 and times_match:
             print("  Already correct -- nothing to do.")
         else:
+            if not times_match:
+                print(f"  Times changed: w1 {cur_start1}–{cur_end1}→{start1}–{end1}  "
+                      f"w2 {cur_start2}–{cur_end2}→{start2}–{end2}")
             api.set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
             print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
                   f"window2={'ENABLED' if enable2 else 'DISABLED'}")
