@@ -1,3 +1,7 @@
+
+· GITIGNORE
+Copy
+
 # Secrets — never commit
 .env
  
@@ -6,6 +10,14 @@
  
 # macOS
 .DS_Store
+ 
+# Python virtualenv
+bin/
+lib/
+include/
+pyvenv.cfg
+venv/
+.venv/
  
 # Python
 __pycache__/
