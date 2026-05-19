@@ -108,11 +108,11 @@ def _read_device(sn: str) -> tuple:
     return soc, pv_kw
 
 
-def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext) -> tuple:
+def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext, force: bool = False) -> tuple:
     """Determine window times, targets and enable flags from strategy + context.
 
     Returns (start1, end1, enable1, start2, end2, enable2, morning_target, evening_target).
-    enable=None means frozen (outside active period).
+    enable=None means frozen (outside active period) — bypassed when force=True.
     """
     start1, end1   = strategy.get_window1(ctx)
     start2, end2   = strategy.get_window2(ctx)
@@ -122,10 +122,11 @@ def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext) -> t
     enable1 = strategy.enable1() and (ctx.soc < morning_target)
     enable2 = strategy.enable2() and (ctx.soc < evening_target)
 
-    if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
-        enable1 = None
-    if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
-        enable2 = None
+    if not force:
+        if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):
+            enable1 = None
+        if windows.is_closed(now, end2) or windows.is_not_opened_yet(now, start2):
+            enable2 = None
 
     return start1, end1, enable1, start2, end2, enable2, morning_target, evening_target
 
@@ -245,7 +246,7 @@ def main():
     ctx         = ChargeContext(low_solar=low_solar, soc=soc, pv_kw=pv_kw, winter=winter)
 
     start1, end1, enable1, start2, end2, enable2, morning_target, evening_target = \
-        _evaluate_windows(now, strategy, ctx)
+        _evaluate_windows(now, strategy, ctx, force)
 
     print(f"FoxESS Grid Charge Scheduler")
     print(f"  Device  : {sn}")
