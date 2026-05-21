@@ -27,6 +27,7 @@ import windows
 import config as cfg
 from unittest.mock import patch
 import strategies as _strategies_module
+from foxess_grid_charge_scheduler import _window_in_progress
 
 
 class patch_hour:
@@ -715,6 +716,44 @@ class TestChargeStateSundayScenario(unittest.TestCase):
             self.assertTrue(self.cs.is_active(dt(20, 30)))
         # Still active after multiple reads
         self.assertTrue(self.cs.STATE_FILE.exists())
+
+
+
+# ── Window in progress ────────────────────────────────────────────────────────
+class TestWindowInProgress(unittest.TestCase):
+    """Tests for _window_in_progress — used to lock API times during charging."""
+
+    def test_inside_window(self):
+        self.assertTrue(_window_in_progress(dt(16, 30), "16:11", "17:00"))
+
+    def test_at_start(self):
+        self.assertTrue(_window_in_progress(dt(16, 11), "16:11", "17:00"))
+
+    def test_before_start(self):
+        self.assertFalse(_window_in_progress(dt(16, 10), "16:11", "17:00"))
+
+    def test_at_end_not_active(self):
+        self.assertFalse(_window_in_progress(dt(17, 0), "16:11", "17:00"))
+
+    def test_after_end(self):
+        self.assertFalse(_window_in_progress(dt(17, 30), "16:11", "17:00"))
+
+    def test_morning_window(self):
+        self.assertTrue(_window_in_progress(dt(6, 55), "06:50", "07:00"))
+
+    def test_before_morning_window(self):
+        self.assertFalse(_window_in_progress(dt(6, 49), "06:50", "07:00"))
+
+    def test_sunday_evening_window(self):
+        self.assertTrue(_window_in_progress(dt(20, 30), "20:00", "21:00"))
+
+    def test_dynamic_scenario_16_11_to_17(self):
+        """Replay real scenario: window set to 16:11-17:00 at 16:16.
+        Should be in progress — API times must be kept."""
+        self.assertTrue(_window_in_progress(dt(16, 16), "16:11", "17:00"))
+        self.assertTrue(_window_in_progress(dt(16, 30), "16:11", "17:00"))
+        self.assertTrue(_window_in_progress(dt(16, 59), "16:11", "17:00"))
+        self.assertFalse(_window_in_progress(dt(17, 0),  "16:11", "17:00"))
 
 
 if __name__ == "__main__":

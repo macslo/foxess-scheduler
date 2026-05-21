@@ -54,7 +54,7 @@ def _should_skip_early(now: datetime.datetime, force: bool) -> bool:
     if not force and not (cfg.ACTIVE_HOUR_START <= now.hour < cfg.ACTIVE_HOUR_END):
         print(f"[SKIP] outside active hours ({cfg.ACTIVE_HOUR_START}:00–{cfg.ACTIVE_HOUR_END}:00)")
         return True
-    if not force and charge_state.is_active(now):
+    if not force and charge_state.should_skip(now):
         print("[SKIP] charge window active — FoxESS managing charge internally")
         return True
     return False
@@ -106,6 +106,15 @@ def _read_device(sn: str) -> tuple:
         print("PV unknown -- assuming 0 kW")
         pv_kw = 0.0
     return soc, pv_kw
+
+
+def _window_in_progress(now: datetime.datetime, start: str, end: str) -> bool:
+    """Return True if now is between window start and end."""
+    h_s, m_s = map(int, start.split(":"))
+    h_e, m_e = map(int, end.split(":"))
+    start_dt = now.replace(hour=h_s, minute=m_s, second=0, microsecond=0)
+    end_dt   = now.replace(hour=h_e, minute=m_e, second=0, microsecond=0)
+    return start_dt <= now < end_dt
 
 
 def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext, force: bool = False) -> tuple:
@@ -160,14 +169,23 @@ def _apply(sn, now, ctx, strategy,
 
         print(f"  Current : window1={already1}  window2={already2}")
 
-        # Compare times from API with desired times
-        def _api_time(d: dict, key_start: str, key_end: str) -> tuple:
-            s = cur.get(key_start, {}); e = cur.get(key_end, {})
-            return (f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}",
-                    f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}")
+        # Parse current times from API
+        def _fmt(d: dict, key: str) -> str:
+            t = cur.get(key, {})
+            return f"{t.get('hour', 0):02d}:{t.get('minute', 0):02d}"
 
-        cur_start1, cur_end1 = _api_time(cur, "startTime1", "endTime1")
-        cur_start2, cur_end2 = _api_time(cur, "startTime2", "endTime2")
+        cur_start1, cur_end1 = _fmt(cur, "startTime1"), _fmt(cur, "endTime1")
+        cur_start2, cur_end2 = _fmt(cur, "startTime2"), _fmt(cur, "endTime2")
+
+        # If a window is currently in progress, keep its API times to prevent
+        # dynamic recalculation from causing spurious changes and notifications.
+        # API is the source of truth for active window times.
+        if already1 and _window_in_progress(now, cur_start1, cur_end1):
+            start1, end1 = cur_start1, cur_end1
+            print(f"  Window 1 in progress — keeping API times ({start1}–{end1})")
+        if already2 and _window_in_progress(now, cur_start2, cur_end2):
+            start2, end2 = cur_start2, cur_end2
+            print(f"  Window 2 in progress — keeping API times ({start2}–{end2})")
 
         times_match = (cur_start1 == start1 and cur_end1 == end1 and
                        cur_start2 == start2 and cur_end2 == end2)
@@ -182,7 +200,8 @@ def _apply(sn, now, ctx, strategy,
             print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
                   f"window2={'ENABLED' if enable2 else 'DISABLED'}")
             changed = True
-            _update_charge_state(enable1, enable2, end1, end2, morning_target, evening_target)
+            _update_charge_state(enable1, enable2, end1, end2,
+                                 morning_target, evening_target)
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)
@@ -204,12 +223,10 @@ def _apply(sn, now, ctx, strategy,
     )
 
 
-def _update_charge_state(enable1, enable2, end1, end2, morning_target, evening_target):
-    """Save or clear charge state based on active windows and targets.
-
-    Only saves when target=100% — FoxESS handles the limit itself.
-    For targets < 100% (e.g. 85%) we keep checking SOC every 2 min.
-    """
+def _update_charge_state(enable1, enable2, end1, end2,
+                         morning_target, evening_target):
+    """Save or clear charge state. Only saves when target=100% —
+    FoxESS handles the charge limit itself so we can skip API calls."""
     if enable1 and not enable2 and morning_target == 100:
         charge_state.save(end1)
     elif enable2 and not enable1 and evening_target == 100:
