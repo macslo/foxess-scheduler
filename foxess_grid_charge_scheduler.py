@@ -10,7 +10,6 @@ window — no unnecessary API calls.
 import datetime
 import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -44,33 +43,9 @@ import notifier
 import weather
 import charge_state
 from context import ChargeContext
+from scheduler_models import ChargePlan, ChargeWindow, ProximityResult
 
 api.API_KEY = API_KEY
-
-
-# ── Charge plan ───────────────────────────────────────────────────────────────
-
-@dataclass
-class ChargeWindow:
-    start: str
-    end: str
-    enabled: bool | None
-
-
-@dataclass
-class ChargePlan:
-    window1: ChargeWindow
-    window2: ChargeWindow
-    morning_target: int
-    evening_target: int
-
-
-@dataclass
-class ProximityResult:
-    should_run: bool
-    radiation: int | None = None
-    low_solar: bool | None = None
-    skip_reason: str | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
