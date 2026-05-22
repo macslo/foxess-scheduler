@@ -20,7 +20,7 @@ runtime from current SOC and PV output for maximum accuracy.
 import datetime
 from abc import ABC, abstractmethod
 import config as cfg
-from context import ChargeContext
+from scheduler_models import ChargeContext
 
 
 class ChargeStrategy(ABC):

@@ -73,7 +73,7 @@ strategies.py                    ← charging strategy per season/day type
 weather.py                       ← solar forecast (Open-Meteo shortwave radiation)
 notifier.py                      ← Discord webhook notifications
 windows.py                       ← window proximity, freeze and status helpers
-context.py                       ← ChargeContext dataclass
+scheduler_models.py              ← scheduler dataclasses
 charge_state.py                  ← persist active window state between cron runs
 config.py                        ← all tunable settings (committed to repo)
 .env                             ← secrets only — never committed

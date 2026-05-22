@@ -4,6 +4,14 @@ from dataclasses import dataclass
 
 
 @dataclass
+class ChargeContext:
+    low_solar: bool
+    soc: float | None
+    pv_kw: float | None
+    winter: bool
+
+
+@dataclass
 class ChargeWindow:
     start: str
     end: str

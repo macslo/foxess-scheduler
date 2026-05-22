@@ -21,7 +21,7 @@ from strategies import (
     DynamicWinterWeekday, DynamicWinterWeekend,
     ManualStrategy,
 )
-from context import ChargeContext
+from scheduler_models import ChargeContext
 from weather import is_low_solar, SOLAR_GOOD, SOLAR_POOR
 import windows
 import config as cfg

@@ -6,8 +6,7 @@ import charge_state
 import config as cfg
 import weather
 import windows
-from context import ChargeContext
-from scheduler_models import ProximityResult
+from scheduler_models import ChargeContext, ProximityResult
 
 
 def window_in_progress(now: datetime.datetime, start: str, end: str) -> bool:

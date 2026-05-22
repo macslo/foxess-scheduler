@@ -41,9 +41,8 @@ import windows
 import strategies
 import notifier
 import charge_state
-from context import ChargeContext
 from proximity import proximity_check, window_in_progress
-from scheduler_models import ChargePlan, ChargeWindow
+from scheduler_models import ChargeContext, ChargePlan, ChargeWindow
 
 api.API_KEY = API_KEY
 
