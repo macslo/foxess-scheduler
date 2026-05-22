@@ -199,72 +199,112 @@ def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext,
     )
 
 
+def _api_time(cur: dict, key: str) -> str:
+    t = cur.get(key, {})
+    return f"{t.get('hour', 0):02d}:{t.get('minute', 0):02d}"
+
+
+def _use_api_window_if_frozen(window: ChargeWindow, cur: dict, idx: int, already: bool) -> None:
+    """Frozen windows keep current API enable state and API times."""
+    if window.enabled is not None:
+        return
+    window.enabled = already
+    start = cur.get(f"startTime{idx}", {})
+    end = cur.get(f"endTime{idx}", {})
+    if start and end:
+        window.start = f"{start.get('hour', 0):02d}:{start.get('minute', 0):02d}"
+        window.end = f"{end.get('hour', 0):02d}:{end.get('minute', 0):02d}"
+
+
+def _keep_api_times_if_in_progress(now: datetime.datetime, plan: ChargePlan,
+                                   cur: dict, already1: bool, already2: bool) -> None:
+    """Keep API times for active windows to avoid dynamic recalculation churn."""
+    cur_start1, cur_end1 = _api_time(cur, "startTime1"), _api_time(cur, "endTime1")
+    cur_start2, cur_end2 = _api_time(cur, "startTime2"), _api_time(cur, "endTime2")
+
+    if already1 and _window_in_progress(now, cur_start1, cur_end1):
+        plan.window1.start, plan.window1.end = cur_start1, cur_end1
+        print(f"  Window 1 in progress — keeping API times ({cur_start1}–{cur_end1})")
+    if already2 and _window_in_progress(now, cur_start2, cur_end2):
+        plan.window2.start, plan.window2.end = cur_start2, cur_end2
+        print(f"  Window 2 in progress — keeping API times ({cur_start2}–{cur_end2})")
+
+
+def _times_match_enabled_windows(plan: ChargePlan, cur: dict,
+                                 already1: bool, already2: bool) -> bool:
+    """Compare times only for currently enabled windows."""
+    w1 = plan.window1
+    w2 = plan.window2
+    matches = True
+    if w1.enabled and already1:
+        matches = matches and (
+            _api_time(cur, "startTime1") == w1.start and _api_time(cur, "endTime1") == w1.end
+        )
+    if w2.enabled and already2:
+        matches = matches and (
+            _api_time(cur, "startTime2") == w2.start and _api_time(cur, "endTime2") == w2.end
+        )
+    return matches
+
+
+def _log_time_changes(plan: ChargePlan, cur: dict, already1: bool, already2: bool) -> None:
+    w1 = plan.window1
+    w2 = plan.window2
+    cur_start1, cur_end1 = _api_time(cur, "startTime1"), _api_time(cur, "endTime1")
+    cur_start2, cur_end2 = _api_time(cur, "startTime2"), _api_time(cur, "endTime2")
+
+    if w1.enabled and already1 and (cur_start1 != w1.start or cur_end1 != w1.end):
+        print(f"  Times changed: w1 {cur_start1}–{cur_end1}→{w1.start}–{w1.end}")
+    if w2.enabled and already2 and (cur_start2 != w2.start or cur_end2 != w2.end):
+        print(f"  Times changed: w2 {cur_start2}–{cur_end2}→{w2.start}–{w2.end}")
+
+
+def _send_plan(sn: str, plan: ChargePlan) -> None:
+    w1 = plan.window1
+    w2 = plan.window2
+    api.set_charge_windows(sn, w1.enabled, w1.start, w1.end,
+                           w2.enabled, w2.start, w2.end)
+    print(f"  Done: window1={'ENABLED' if w1.enabled else 'DISABLED'}  "
+          f"window2={'ENABLED' if w2.enabled else 'DISABLED'}")
+
+
+def _notify_run(sn, ctx, strategy, plan: ChargePlan, radiation, changed: bool) -> None:
+    notifier.notify_run(
+        sn=sn,
+        strategy_name=strategy.name,
+        soc=ctx.soc,
+        radiation=radiation,
+        low_solar=ctx.low_solar,
+        morning_target=plan.morning_target,
+        evening_target=plan.evening_target,
+        enable1=plan.window1.enabled, enable2=plan.window2.enabled,
+        start1=plan.window1.start, end1=plan.window1.end,
+        start2=plan.window2.start, end2=plan.window2.end,
+        changed=changed,
+    )
+
+
 def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
     """Read current state, apply changes if needed, save state and notify."""
     changed = False
     try:
-        cur      = api.get_charge_settings(sn)
+        cur = api.get_charge_settings(sn)
         already1 = cur.get("enable1")
         already2 = cur.get("enable2")
-        w1 = plan.window1
-        w2 = plan.window2
 
-        # Frozen windows keep their current enable state and API times
-        if w1.enabled is None:
-            w1.enabled = already1
-            s = cur.get("startTime1", {}); e = cur.get("endTime1", {})
-            if s and e:
-                w1.start = f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}"
-                w1.end   = f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}"
-
-        if w2.enabled is None:
-            w2.enabled = already2
-            s = cur.get("startTime2", {}); e = cur.get("endTime2", {})
-            if s and e:
-                w2.start = f"{s.get('hour', 0):02d}:{s.get('minute', 0):02d}"
-                w2.end   = f"{e.get('hour', 0):02d}:{e.get('minute', 0):02d}"
-
+        _use_api_window_if_frozen(plan.window1, cur, 1, already1)
+        _use_api_window_if_frozen(plan.window2, cur, 2, already2)
         print(f"  Current : window1={already1}  window2={already2}")
 
-        # Parse current times from API
-        def _fmt(d: dict, key: str) -> str:
-            t = cur.get(key, {})
-            return f"{t.get('hour', 0):02d}:{t.get('minute', 0):02d}"
+        _keep_api_times_if_in_progress(now, plan, cur, already1, already2)
+        times_match = _times_match_enabled_windows(plan, cur, already1, already2)
 
-        cur_start1, cur_end1 = _fmt(cur, "startTime1"), _fmt(cur, "endTime1")
-        cur_start2, cur_end2 = _fmt(cur, "startTime2"), _fmt(cur, "endTime2")
-
-        # If a window is currently in progress, keep its API times to prevent
-        # dynamic recalculation from causing spurious changes and notifications.
-        # API is the source of truth for active window times.
-        if already1 and _window_in_progress(now, cur_start1, cur_end1):
-            w1.start, w1.end = cur_start1, cur_end1
-            print(f"  Window 1 in progress — keeping API times ({w1.start}–{w1.end})")
-        if already2 and _window_in_progress(now, cur_start2, cur_end2):
-            w2.start, w2.end = cur_start2, cur_end2
-            print(f"  Window 2 in progress — keeping API times ({w2.start}–{w2.end})")
-
-        # Times only matter when window is enabled — disabled windows don't charge
-        # regardless of what times are set. Comparing times for disabled windows
-        # causes spurious updates when dynamic strategy recalculates start times.
-        times_match = True
-        if w1.enabled and already1:
-            times_match = times_match and (cur_start1 == w1.start and cur_end1 == w1.end)
-        if w2.enabled and already2:
-            times_match = times_match and (cur_start2 == w2.start and cur_end2 == w2.end)
-
-        if already1 == w1.enabled and already2 == w2.enabled and times_match:
+        if already1 == plan.window1.enabled and already2 == plan.window2.enabled and times_match:
             print("  Already correct -- nothing to do.")
         else:
             if not times_match:
-                if w1.enabled and already1 and (cur_start1 != w1.start or cur_end1 != w1.end):
-                    print(f"  Times changed: w1 {cur_start1}–{cur_end1}→{w1.start}–{w1.end}")
-                if w2.enabled and already2 and (cur_start2 != w2.start or cur_end2 != w2.end):
-                    print(f"  Times changed: w2 {cur_start2}–{cur_end2}→{w2.start}–{w2.end}")
-            api.set_charge_windows(sn, w1.enabled, w1.start, w1.end,
-                                   w2.enabled, w2.start, w2.end)
-            print(f"  Done: window1={'ENABLED' if w1.enabled else 'DISABLED'}  "
-                  f"window2={'ENABLED' if w2.enabled else 'DISABLED'}")
+                _log_time_changes(plan, cur, already1, already2)
+            _send_plan(sn, plan)
             changed = True
 
         _update_charge_state(plan)
@@ -274,19 +314,7 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
         print(f"  Error: {e}")
         return
 
-    notifier.notify_run(
-        sn=sn,
-        strategy_name=strategy.name,
-        soc=ctx.soc,
-        radiation=radiation,
-        low_solar=ctx.low_solar,
-        morning_target=plan.morning_target,
-        evening_target=plan.evening_target,
-        enable1=w1.enabled, enable2=w2.enabled,
-        start1=w1.start, end1=w1.end,
-        start2=w2.start, end2=w2.end,
-        changed=changed,
-    )
+    _notify_run(sn, ctx, strategy, plan, radiation, changed)
 
 
 def _update_charge_state(plan: ChargePlan):
