@@ -65,6 +65,14 @@ class ChargePlan:
     evening_target: int
 
 
+@dataclass
+class ProximityResult:
+    should_run: bool
+    radiation: int | None = None
+    low_solar: bool | None = None
+    skip_reason: str | None = None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _should_skip_early(now: datetime.datetime, force: bool) -> bool:
@@ -92,8 +100,8 @@ def _saved_windows_near_or_active(now: datetime.datetime) -> list[str]:
     return relevant
 
 
-def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool) -> tuple:
-    """Two-phase proximity check. Returns (radiation, low_solar) or exits.
+def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool) -> ProximityResult:
+    """Two-phase proximity check. Returns whether we should run the full scheduler.
 
     Phase 0: check saved window state — if we previously enabled a window
              that is near or in progress, don't skip (may need to disable it).
@@ -111,8 +119,11 @@ def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool
         if not saved_relevant:
             s1, e1 = strategy.get_window1(ctx_worst)
             s2, e2 = strategy.get_window2(ctx_worst)
-            print(f"[SKIP] not near any window  (w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-            sys.exit(0)
+            return ProximityResult(
+                should_run=False,
+                skip_reason=(f"[SKIP] not near any window  (w1={s1}–{e1}  "
+                             f"w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)"),
+            )
 
     radiation = weather.get_solar_forecast(FORECAST_LAT, FORECAST_LON)
     low_solar = weather.is_low_solar(radiation, winter)
@@ -123,11 +134,16 @@ def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool
             if not saved_relevant:
                 s1, e1 = strategy.get_window1(ctx_clear)
                 s2, e2 = strategy.get_window2(ctx_clear)
-                print(f"[SKIP] not near any window after solar check  "
-                      f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-                sys.exit(0)
+                return ProximityResult(
+                    should_run=False,
+                    radiation=radiation,
+                    low_solar=low_solar,
+                    skip_reason=(f"[SKIP] not near any window after solar check  "
+                                 f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  "
+                                 f"lead={cfg.WINDOW_LEAD_MINUTES}min)"),
+                )
 
-    return radiation, low_solar
+    return ProximityResult(should_run=True, radiation=radiation, low_solar=low_solar)
 
 
 def _resolve_sn() -> str:
@@ -347,7 +363,13 @@ def main():
     strategy = strategies.get_strategy(today, cfg.TARIFF)
     winter   = today.month >= 10 or today.month <= 3
 
-    radiation, low_solar = _proximity_check(now, strategy, force, winter)
+    proximity = _proximity_check(now, strategy, force, winter)
+    if not proximity.should_run:
+        print(proximity.skip_reason)
+        sys.exit(0)
+
+    radiation = proximity.radiation
+    low_solar = proximity.low_solar
 
     if not API_KEY:
         msg = "FOXESS_API_KEY is not set. Get your key at foxesscloud.com → Personal Centre → API Management"
