@@ -78,6 +78,20 @@ def _should_skip_early(now: datetime.datetime, force: bool) -> bool:
     return False
 
 
+def _saved_windows_near_or_active(now: datetime.datetime) -> list[str]:
+    """Return saved enabled windows that are near or already in progress."""
+    saved = charge_state.get_last_windows()
+    if not saved:
+        return []
+
+    relevant = []
+    if _saved_window_relevant(now, saved, 1):
+        relevant.append(f"w1={saved['start1']}–{saved['end1']}")
+    if _saved_window_relevant(now, saved, 2):
+        relevant.append(f"w2={saved['start2']}–{saved['end2']}")
+    return relevant
+
+
 def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool) -> tuple:
     """Two-phase proximity check. Returns (radiation, low_solar) or exits.
 
@@ -86,25 +100,15 @@ def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool
     Phase 1: check against worst-case (earliest) windows — no API calls.
     Phase 2: fetch solar forecast, recheck only if clear day (later windows).
     """
-    if not force:
-        saved = charge_state.get_last_windows()
-        if saved:
-            w1_relevant = _saved_window_relevant(now, saved, 1)
-            w2_relevant = _saved_window_relevant(now, saved, 2)
-            if w1_relevant or w2_relevant:
-                which = []
-                if w1_relevant: which.append(f"w1={saved['start1']}–{saved['end1']}")
-                if w2_relevant: which.append(f"w2={saved['start2']}–{saved['end2']}")
-                print(f"  Saved window near/active: {', '.join(which)} — running full check")
-                # Fall through to full run
+    saved_relevant = [] if force else _saved_windows_near_or_active(now)
+    if saved_relevant:
+        print(f"  Saved window near/active: {', '.join(saved_relevant)} — running full check")
+        # Fall through to full run
 
     ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
     if not force and not windows.near_window(now, strategy, ctx_worst):
         # Only skip if no saved enabled window is near or active.
-        saved = charge_state.get_last_windows()
-        w1_relevant = saved and _saved_window_relevant(now, saved, 1)
-        w2_relevant = saved and _saved_window_relevant(now, saved, 2)
-        if not (w1_relevant or w2_relevant):
+        if not saved_relevant:
             s1, e1 = strategy.get_window1(ctx_worst)
             s2, e2 = strategy.get_window2(ctx_worst)
             print(f"[SKIP] not near any window  (w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
@@ -116,10 +120,7 @@ def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool
     if not force and not low_solar:
         ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
         if not windows.near_window(now, strategy, ctx_clear):
-            saved = charge_state.get_last_windows()
-            w1_relevant = saved and _saved_window_relevant(now, saved, 1)
-            w2_relevant = saved and _saved_window_relevant(now, saved, 2)
-            if not (w1_relevant or w2_relevant):
+            if not saved_relevant:
                 s1, e1 = strategy.get_window1(ctx_clear)
                 s2, e2 = strategy.get_window2(ctx_clear)
                 print(f"[SKIP] not near any window after solar check  "
