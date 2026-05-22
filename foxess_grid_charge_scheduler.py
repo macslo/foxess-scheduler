@@ -63,15 +63,34 @@ def _should_skip_early(now: datetime.datetime, force: bool) -> bool:
 def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool) -> tuple:
     """Two-phase proximity check. Returns (radiation, low_solar) or exits.
 
+    Phase 0: check saved window state — if we previously enabled a window
+             that is near or in progress, don't skip (may need to disable it).
     Phase 1: check against worst-case (earliest) windows — no API calls.
     Phase 2: fetch solar forecast, recheck only if clear day (later windows).
     """
+    if not force:
+        saved = charge_state.get_last_windows()
+        if saved:
+            w1_relevant = _saved_window_relevant(now, saved, 1)
+            w2_relevant = _saved_window_relevant(now, saved, 2)
+            if w1_relevant or w2_relevant:
+                which = []
+                if w1_relevant: which.append(f"w1={saved['start1']}–{saved['end1']}")
+                if w2_relevant: which.append(f"w2={saved['start2']}–{saved['end2']}")
+                print(f"  Saved window near/active: {', '.join(which)} — running full check")
+                # Fall through to full run
+
     ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
     if not force and not windows.near_window(now, strategy, ctx_worst):
-        s1, e1 = strategy.get_window1(ctx_worst)
-        s2, e2 = strategy.get_window2(ctx_worst)
-        print(f"[SKIP] not near any window  (w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-        sys.exit(0)
+        # Only skip if no saved enabled window is near or active.
+        saved = charge_state.get_last_windows()
+        w1_relevant = saved and _saved_window_relevant(now, saved, 1)
+        w2_relevant = saved and _saved_window_relevant(now, saved, 2)
+        if not (w1_relevant or w2_relevant):
+            s1, e1 = strategy.get_window1(ctx_worst)
+            s2, e2 = strategy.get_window2(ctx_worst)
+            print(f"[SKIP] not near any window  (w1={s1}–{e1}  w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+            sys.exit(0)
 
     radiation = weather.get_solar_forecast(FORECAST_LAT, FORECAST_LON)
     low_solar = weather.is_low_solar(radiation, winter)
@@ -79,10 +98,15 @@ def _proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool
     if not force and not low_solar:
         ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
         if not windows.near_window(now, strategy, ctx_clear):
-            s1, e1 = strategy.get_window1(ctx_clear)
-            s2, e2 = strategy.get_window2(ctx_clear)
-            print(f"[SKIP] not near any window after solar check  (w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
-            sys.exit(0)
+            saved = charge_state.get_last_windows()
+            w1_relevant = saved and _saved_window_relevant(now, saved, 1)
+            w2_relevant = saved and _saved_window_relevant(now, saved, 2)
+            if not (w1_relevant or w2_relevant):
+                s1, e1 = strategy.get_window1(ctx_clear)
+                s2, e2 = strategy.get_window2(ctx_clear)
+                print(f"[SKIP] not near any window after solar check  "
+                      f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  lead={cfg.WINDOW_LEAD_MINUTES}min)")
+                sys.exit(0)
 
     return radiation, low_solar
 
@@ -115,6 +139,18 @@ def _window_in_progress(now: datetime.datetime, start: str, end: str) -> bool:
     start_dt = now.replace(hour=h_s, minute=m_s, second=0, microsecond=0)
     end_dt   = now.replace(hour=h_e, minute=m_e, second=0, microsecond=0)
     return start_dt <= now < end_dt
+
+
+def _saved_window_relevant(now: datetime.datetime, saved: dict, idx: int) -> bool:
+    """Return True if a saved enabled window is near or already in progress."""
+    if not saved.get(f"enabled{idx}"):
+        return False
+    start = saved.get(f"start{idx}")
+    end = saved.get(f"end{idx}")
+    if not start or not end:
+        return False
+    mins = windows.minutes_until(now, start)
+    return 0 <= mins <= cfg.WINDOW_LEAD_MINUTES or _window_in_progress(now, start, end)
 
 
 def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext, force: bool = False) -> tuple:
@@ -187,20 +223,29 @@ def _apply(sn, now, ctx, strategy,
             start2, end2 = cur_start2, cur_end2
             print(f"  Window 2 in progress — keeping API times ({start2}–{end2})")
 
-        times_match = (cur_start1 == start1 and cur_end1 == end1 and
-                       cur_start2 == start2 and cur_end2 == end2)
+        # Times only matter when window is enabled — disabled windows don't charge
+        # regardless of what times are set. Comparing times for disabled windows
+        # causes spurious updates when dynamic strategy recalculates start times.
+        times_match = True
+        if enable1 and already1:
+            times_match = times_match and (cur_start1 == start1 and cur_end1 == end1)
+        if enable2 and already2:
+            times_match = times_match and (cur_start2 == start2 and cur_end2 == end2)
 
         if already1 == enable1 and already2 == enable2 and times_match:
             print("  Already correct -- nothing to do.")
         else:
             if not times_match:
-                print(f"  Times changed: w1 {cur_start1}–{cur_end1}→{start1}–{end1}  "
-                      f"w2 {cur_start2}–{cur_end2}→{start2}–{end2}")
+                if enable1 and already1 and (cur_start1 != start1 or cur_end1 != end1):
+                    print(f"  Times changed: w1 {cur_start1}–{cur_end1}→{start1}–{end1}")
+                if enable2 and already2 and (cur_start2 != start2 or cur_end2 != end2):
+                    print(f"  Times changed: w2 {cur_start2}–{cur_end2}→{start2}–{end2}")
             api.set_charge_windows(sn, enable1, start1, end1, enable2, start2, end2)
             print(f"  Done: window1={'ENABLED' if enable1 else 'DISABLED'}  "
                   f"window2={'ENABLED' if enable2 else 'DISABLED'}")
             changed = True
-            _update_charge_state(enable1, enable2, end1, end2,
+
+        _update_charge_state(start1, end1, enable1, start2, end2, enable2,
                                  morning_target, evening_target)
 
     except Exception as e:
@@ -223,18 +268,19 @@ def _apply(sn, now, ctx, strategy,
     )
 
 
-def _update_charge_state(enable1, enable2, end1, end2,
+def _update_charge_state(start1, end1, enable1, start2, end2, enable2,
                          morning_target, evening_target):
-    """Save or clear charge state. Only saves when target=100% —
-    FoxESS handles the charge limit itself so we can skip API calls."""
+    """Persist sent windows, and separately mark target=100% skip windows."""
+    charge_state.save_windows(start1, end1, enable1, start2, end2, enable2)
+
     if enable1 and not enable2 and morning_target == 100:
-        charge_state.save(end1)
+        charge_state.save_skip(end1)
     elif enable2 and not enable1 and evening_target == 100:
-        charge_state.save(end2)
+        charge_state.save_skip(end2)
     elif enable1 and enable2 and morning_target == 100 and evening_target == 100:
-        charge_state.save(max(end1, end2))
+        charge_state.save_skip(max(end1, end2))
     else:
-        charge_state.clear()
+        charge_state.clear_skip()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

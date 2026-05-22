@@ -27,7 +27,7 @@ import windows
 import config as cfg
 from unittest.mock import patch
 import strategies as _strategies_module
-from foxess_grid_charge_scheduler import _window_in_progress
+from foxess_grid_charge_scheduler import _saved_window_relevant, _window_in_progress
 
 
 class patch_hour:
@@ -655,6 +655,27 @@ class TestChargeState(unittest.TestCase):
         self.cs.save("21:00")
         self.assertTrue(self.cs.is_active(dt(20, 0)))
 
+    def test_save_windows_records_last_api_config(self):
+        """Last sent windows are stored independently from skip state."""
+        self.cs.save_windows("06:50", "07:00", True, "16:12", "17:00", True)
+        self.assertEqual(self.cs.get_last_windows()["start2"], "16:12")
+        self.assertFalse(self.cs.should_skip(dt(16, 30)))
+
+    def test_expired_skip_keeps_saved_windows(self):
+        """Expired target=100 skip should not erase last window config."""
+        self.cs.save_windows("06:50", "07:00", True, "16:12", "17:00", True)
+        self.cs.save_skip("16:00")
+        self.assertFalse(self.cs.should_skip(dt(16, 30)))
+        self.assertEqual(self.cs.get_last_windows()["start2"], "16:12")
+
+    def test_clear_skip_keeps_saved_windows(self):
+        """Clearing skip state must preserve windows used by proximity checks."""
+        self.cs.save_windows("06:50", "07:00", True, "16:12", "17:00", True)
+        self.cs.save_skip("17:00")
+        self.cs.clear_skip()
+        self.assertFalse(self.cs.should_skip(dt(16, 30)))
+        self.assertEqual(self.cs.get_last_windows()["start2"], "16:12")
+
 
 # ── Charge state — Sunday evening scenario ────────────────────────────────────
 class TestChargeStateSundayScenario(unittest.TestCase):
@@ -754,6 +775,38 @@ class TestWindowInProgress(unittest.TestCase):
         self.assertTrue(_window_in_progress(dt(16, 30), "16:11", "17:00"))
         self.assertTrue(_window_in_progress(dt(16, 59), "16:11", "17:00"))
         self.assertFalse(_window_in_progress(dt(17, 0),  "16:11", "17:00"))
+
+
+class TestSavedWindowRelevant(unittest.TestCase):
+    """Saved enabled windows wake the scheduler before/during API window."""
+
+    def test_near_saved_window_start(self):
+        saved = {
+            "start1": "06:50", "end1": "07:00", "enabled1": True,
+            "start2": "16:12", "end2": "17:00", "enabled2": True,
+        }
+        self.assertTrue(_saved_window_relevant(dt(16, 10), saved, 2))
+
+    def test_saved_window_in_progress(self):
+        saved = {
+            "start1": "06:50", "end1": "07:00", "enabled1": True,
+            "start2": "16:12", "end2": "17:00", "enabled2": True,
+        }
+        self.assertTrue(_saved_window_relevant(dt(16, 16), saved, 2))
+
+    def test_before_saved_window_lead(self):
+        saved = {
+            "start1": "06:50", "end1": "07:00", "enabled1": True,
+            "start2": "16:12", "end2": "17:00", "enabled2": True,
+        }
+        self.assertFalse(_saved_window_relevant(dt(16, 8), saved, 2))
+
+    def test_disabled_saved_window_not_relevant(self):
+        saved = {
+            "start1": "06:50", "end1": "07:00", "enabled1": True,
+            "start2": "16:12", "end2": "17:00", "enabled2": False,
+        }
+        self.assertFalse(_saved_window_relevant(dt(16, 16), saved, 2))
 
 
 if __name__ == "__main__":
