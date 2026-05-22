@@ -27,7 +27,7 @@ import windows
 import config as cfg
 from unittest.mock import patch
 import strategies as _strategies_module
-from foxess_grid_charge_scheduler import _saved_window_relevant, _window_in_progress
+from proximity import saved_window_relevant, window_in_progress
 
 
 class patch_hour:
@@ -742,39 +742,39 @@ class TestChargeStateSundayScenario(unittest.TestCase):
 
 # ── Window in progress ────────────────────────────────────────────────────────
 class TestWindowInProgress(unittest.TestCase):
-    """Tests for _window_in_progress — used to lock API times during charging."""
+    """Tests for window_in_progress — used to lock API times during charging."""
 
     def test_inside_window(self):
-        self.assertTrue(_window_in_progress(dt(16, 30), "16:11", "17:00"))
+        self.assertTrue(window_in_progress(dt(16, 30), "16:11", "17:00"))
 
     def test_at_start(self):
-        self.assertTrue(_window_in_progress(dt(16, 11), "16:11", "17:00"))
+        self.assertTrue(window_in_progress(dt(16, 11), "16:11", "17:00"))
 
     def test_before_start(self):
-        self.assertFalse(_window_in_progress(dt(16, 10), "16:11", "17:00"))
+        self.assertFalse(window_in_progress(dt(16, 10), "16:11", "17:00"))
 
     def test_at_end_not_active(self):
-        self.assertFalse(_window_in_progress(dt(17, 0), "16:11", "17:00"))
+        self.assertFalse(window_in_progress(dt(17, 0), "16:11", "17:00"))
 
     def test_after_end(self):
-        self.assertFalse(_window_in_progress(dt(17, 30), "16:11", "17:00"))
+        self.assertFalse(window_in_progress(dt(17, 30), "16:11", "17:00"))
 
     def test_morning_window(self):
-        self.assertTrue(_window_in_progress(dt(6, 55), "06:50", "07:00"))
+        self.assertTrue(window_in_progress(dt(6, 55), "06:50", "07:00"))
 
     def test_before_morning_window(self):
-        self.assertFalse(_window_in_progress(dt(6, 49), "06:50", "07:00"))
+        self.assertFalse(window_in_progress(dt(6, 49), "06:50", "07:00"))
 
     def test_sunday_evening_window(self):
-        self.assertTrue(_window_in_progress(dt(20, 30), "20:00", "21:00"))
+        self.assertTrue(window_in_progress(dt(20, 30), "20:00", "21:00"))
 
     def test_dynamic_scenario_16_11_to_17(self):
         """Replay real scenario: window set to 16:11-17:00 at 16:16.
         Should be in progress — API times must be kept."""
-        self.assertTrue(_window_in_progress(dt(16, 16), "16:11", "17:00"))
-        self.assertTrue(_window_in_progress(dt(16, 30), "16:11", "17:00"))
-        self.assertTrue(_window_in_progress(dt(16, 59), "16:11", "17:00"))
-        self.assertFalse(_window_in_progress(dt(17, 0),  "16:11", "17:00"))
+        self.assertTrue(window_in_progress(dt(16, 16), "16:11", "17:00"))
+        self.assertTrue(window_in_progress(dt(16, 30), "16:11", "17:00"))
+        self.assertTrue(window_in_progress(dt(16, 59), "16:11", "17:00"))
+        self.assertFalse(window_in_progress(dt(17, 0),  "16:11", "17:00"))
 
 
 class TestSavedWindowRelevant(unittest.TestCase):
@@ -785,28 +785,28 @@ class TestSavedWindowRelevant(unittest.TestCase):
             "start1": "06:50", "end1": "07:00", "enabled1": True,
             "start2": "16:12", "end2": "17:00", "enabled2": True,
         }
-        self.assertTrue(_saved_window_relevant(dt(16, 10), saved, 2))
+        self.assertTrue(saved_window_relevant(dt(16, 10), saved, 2))
 
     def test_saved_window_in_progress(self):
         saved = {
             "start1": "06:50", "end1": "07:00", "enabled1": True,
             "start2": "16:12", "end2": "17:00", "enabled2": True,
         }
-        self.assertTrue(_saved_window_relevant(dt(16, 16), saved, 2))
+        self.assertTrue(saved_window_relevant(dt(16, 16), saved, 2))
 
     def test_before_saved_window_lead(self):
         saved = {
             "start1": "06:50", "end1": "07:00", "enabled1": True,
             "start2": "16:12", "end2": "17:00", "enabled2": True,
         }
-        self.assertFalse(_saved_window_relevant(dt(16, 8), saved, 2))
+        self.assertFalse(saved_window_relevant(dt(16, 8), saved, 2))
 
     def test_disabled_saved_window_not_relevant(self):
         saved = {
             "start1": "06:50", "end1": "07:00", "enabled1": True,
             "start2": "16:12", "end2": "17:00", "enabled2": False,
         }
-        self.assertFalse(_saved_window_relevant(dt(16, 16), saved, 2))
+        self.assertFalse(saved_window_relevant(dt(16, 16), saved, 2))
 
 
 if __name__ == "__main__":
