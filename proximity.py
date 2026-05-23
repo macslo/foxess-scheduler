@@ -44,9 +44,33 @@ def saved_windows_near_or_active(now: datetime.datetime) -> list[str]:
     return relevant
 
 
+def _skip_before_solar(strategy, ctx: ChargeContext) -> ProximityResult:
+    s1, e1 = strategy.get_window1(ctx)
+    s2, e2 = strategy.get_window2(ctx)
+    return ProximityResult(
+        should_run=False,
+        skip_reason=(f"[SKIP] not near any window  (w1={s1}–{e1}  "
+                     f"w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)"),
+    )
+
+
+def _skip_after_solar(strategy, ctx: ChargeContext,
+                      radiation: int, low_solar: bool) -> ProximityResult:
+    s1, e1 = strategy.get_window1(ctx)
+    s2, e2 = strategy.get_window2(ctx)
+    return ProximityResult(
+        should_run=False,
+        radiation=radiation,
+        low_solar=low_solar,
+        skip_reason=(f"[SKIP] not near any window after solar check  "
+                     f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  "
+                     f"lead={cfg.WINDOW_LEAD_MINUTES}min)"),
+    )
+
+
 def proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool,
                     forecast_lat: float, forecast_lon: float) -> ProximityResult:
-    """Two-phase proximity check. Returns whether we should run the full scheduler.
+    """Return whether we should run the full scheduler.
 
     Phase 0: check saved window state — if we previously enabled a window
              that is near or in progress, don't skip (may need to disable it).
@@ -59,33 +83,15 @@ def proximity_check(now: datetime.datetime, strategy, force: bool, winter: bool,
         # Fall through to full run
 
     ctx_worst = ChargeContext(low_solar=True, soc=None, pv_kw=None, winter=winter)
-    if not force and not windows.near_window(now, strategy, ctx_worst):
-        # Only skip if no saved enabled window is near or active.
-        if not saved_relevant:
-            s1, e1 = strategy.get_window1(ctx_worst)
-            s2, e2 = strategy.get_window2(ctx_worst)
-            return ProximityResult(
-                should_run=False,
-                skip_reason=(f"[SKIP] not near any window  (w1={s1}–{e1}  "
-                             f"w2={s2}–{e2}  lead={cfg.WINDOW_LEAD_MINUTES}min)"),
-            )
+    if not force and not saved_relevant and not windows.near_window(now, strategy, ctx_worst):
+        return _skip_before_solar(strategy, ctx_worst)
 
     radiation = weather.get_solar_forecast(forecast_lat, forecast_lon)
     low_solar = weather.is_low_solar(radiation, winter)
 
-    if not force and not low_solar:
-        ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
-        if not windows.near_window(now, strategy, ctx_clear):
-            if not saved_relevant:
-                s1, e1 = strategy.get_window1(ctx_clear)
-                s2, e2 = strategy.get_window2(ctx_clear)
-                return ProximityResult(
-                    should_run=False,
-                    radiation=radiation,
-                    low_solar=low_solar,
-                    skip_reason=(f"[SKIP] not near any window after solar check  "
-                                 f"(w1={s1}–{e1}  w2={s2}–{e2}  ☀️  "
-                                 f"lead={cfg.WINDOW_LEAD_MINUTES}min)"),
-                )
+    ctx_clear = ChargeContext(low_solar=False, soc=None, pv_kw=None, winter=winter)
+    if (not force and not low_solar and not saved_relevant
+            and not windows.near_window(now, strategy, ctx_clear)):
+        return _skip_after_solar(strategy, ctx_clear, radiation, low_solar)
 
     return ProximityResult(should_run=True, radiation=radiation, low_solar=low_solar)
