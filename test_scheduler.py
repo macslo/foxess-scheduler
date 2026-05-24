@@ -27,7 +27,7 @@ import windows
 import config as cfg
 from unittest.mock import patch
 import strategies as _strategies_module
-from proximity import saved_window_relevant, window_in_progress
+from proximity import saved_window_relevant, window_in_progress, proximity_check
 
 
 class patch_hour:
@@ -733,6 +733,159 @@ class TestSavedWindowRelevant(unittest.TestCase):
             "start2": "16:12", "end2": "17:00", "enabled2": False,
         }
         self.assertFalse(saved_window_relevant(dt(16, 16), saved, 2))
+
+
+# ── proximity_check ───────────────────────────────────────────────────────────
+class TestProximityCheck(unittest.TestCase):
+    """Tests for proximity_check — the three-phase scheduler gate."""
+
+    LAT, LON = 50.0, 18.0
+
+    def _strategy(self, w1s="06:50", w1e="07:00", w2s="16:20", w2e="17:00"):
+        """Minimal strategy stub returning fixed window times."""
+        class S:
+            def get_window1(self, c): return (w1s, w1e)
+            def get_window2(self, c): return (w2s, w2e)
+        return S()
+
+    # ── Phase 1: skip before solar fetch ─────────────────────────────────────
+
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_skips_when_not_near_any_window(self, _mock_state, _mock_near):
+        """Far from all windows and no saved state → skip without fetching solar."""
+        result = proximity_check(dt(10, 0), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertFalse(result.should_run)
+        self.assertIn("[SKIP]", result.skip_reason)
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_skip_before_solar_does_not_call_weather(
+            self, _mock_state, _mock_near, _mock_low, mock_forecast):
+        """Phase 1 skip must not fetch solar forecast — no API call."""
+        proximity_check(dt(10, 0), self._strategy(), force=False,
+                        winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        mock_forecast.assert_not_called()
+
+    # ── Phase 2: skip after solar fetch ──────────────────────────────────────
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", side_effect=[True, False])
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_skips_after_solar_on_clear_day_not_near_window(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """Clear day + not near clear-day window → skip after solar fetch."""
+        result = proximity_check(dt(10, 0), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertFalse(result.should_run)
+        self.assertIn("solar check", result.skip_reason)
+        self.assertFalse(result.low_solar)
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", side_effect=[True, False])
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_skip_after_solar_carries_radiation(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """ProximityResult after solar skip should carry radiation value."""
+        result = proximity_check(dt(10, 0), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertEqual(result.radiation, 500)
+
+    # ── Should run ────────────────────────────────────────────────────────────
+
+    @patch("proximity.weather.get_solar_forecast", return_value=100)
+    @patch("proximity.weather.is_low_solar", return_value=True)
+    @patch("proximity.windows.near_window", return_value=True)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_runs_when_near_window_and_low_solar(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """Near a window on a cloudy day → should run."""
+        result = proximity_check(dt(16, 18), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertTrue(result.should_run)
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", return_value=True)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_runs_when_near_window_on_clear_day(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """Near a window even on a clear day → should run."""
+        result = proximity_check(dt(16, 18), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertTrue(result.should_run)
+
+    # ── force=True bypasses all proximity logic ───────────────────────────────
+
+    @patch("proximity.weather.get_solar_forecast", return_value=100)
+    @patch("proximity.weather.is_low_solar", return_value=True)
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_force_bypasses_proximity(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """force=True must always run regardless of window proximity."""
+        result = proximity_check(dt(10, 0), self._strategy(), force=True,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertTrue(result.should_run)
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_force_bypasses_solar_skip(
+            self, _mock_state, _mock_near, _mock_low, _mock_forecast):
+        """force=True on a clear day far from windows must still run."""
+        result = proximity_check(dt(10, 0), self._strategy(), force=True,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertTrue(result.should_run)
+
+    # ── Phase 0: saved window wakes the scheduler ─────────────────────────────
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.windows.minutes_until", return_value=2)
+    @patch("proximity.charge_state.get_last_windows")
+    def test_saved_window_near_forces_run(
+            self, mock_state, _mock_mins, _mock_near, _mock_low, _mock_forecast):
+        """Saved enabled window within lead time → run even if not near current strategy window."""
+        mock_state.return_value = {
+            "start1": "06:50", "end1": "07:00", "enabled1": False,
+            "start2": "16:12", "end2": "17:00", "enabled2": True,
+        }
+        result = proximity_check(dt(16, 10), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertTrue(result.should_run)
+
+    @patch("proximity.weather.get_solar_forecast", return_value=500)
+    @patch("proximity.weather.is_low_solar", return_value=False)
+    @patch("proximity.windows.near_window", return_value=False)
+    @patch("proximity.charge_state.get_last_windows")
+    def test_no_saved_windows_does_not_force_run(
+            self, mock_state, _mock_near, _mock_low, _mock_forecast):
+        """No saved state → phase 0 does not prevent skipping."""
+        mock_state.return_value = None
+        result = proximity_check(dt(10, 0), self._strategy(), force=False,
+                                 winter=False, forecast_lat=self.LAT, forecast_lon=self.LON)
+        self.assertFalse(result.should_run)
+
+    # ── Forecast coords are passed through ────────────────────────────────────
+
+    @patch("proximity.weather.get_solar_forecast", return_value=100)
+    @patch("proximity.weather.is_low_solar", return_value=True)
+    @patch("proximity.windows.near_window", return_value=True)
+    @patch("proximity.charge_state.get_last_windows", return_value=None)
+    def test_forecast_coords_forwarded(
+            self, _mock_state, _mock_near, _mock_low, mock_forecast):
+        """Lat/lon passed to proximity_check must reach get_solar_forecast."""
+        proximity_check(dt(16, 18), self._strategy(), force=False,
+                        winter=False, forecast_lat=51.5, forecast_lon=19.3)
+        mock_forecast.assert_called_once_with(51.5, 19.3)
 
 
 if __name__ == "__main__":
