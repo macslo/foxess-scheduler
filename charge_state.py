@@ -28,13 +28,20 @@ def save_windows(start1: str, end1: str, enabled1: bool,
 
 
 def save_skip(window_end: str):
-    """Mark that we should skip API calls until window_end (target=100%)."""
+    """Mark that we should skip API calls until window_end (target=100%).
+
+    Stores a full ISO datetime so expiry works correctly across midnight —
+    e.g. a Sunday 21:00 window does not stay active on Monday morning.
+    """
     data = {}
     try:
         data = json.loads(STATE_FILE.read_text())
     except Exception:
         pass
-    data["skip_until"] = window_end
+    now = datetime.datetime.now()
+    h, m = map(int, window_end.split(":"))
+    end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    data["skip_until"] = end_dt.isoformat()
     STATE_FILE.write_text(json.dumps(data))
 
 
@@ -75,8 +82,7 @@ def should_skip(now: datetime.datetime) -> bool:
         skip_until = data.get("skip_until")
         if not skip_until:
             return False
-        h, m = map(int, skip_until.split(":"))
-        end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        end_dt = datetime.datetime.fromisoformat(skip_until)
         if now < end_dt:
             return True
         # Expired — remove skip flag but keep window config

@@ -651,11 +651,18 @@ class TestChargeStateSundayScenario(unittest.TestCase):
         self.assertFalse(self.cs.is_active(dt(21, 1)))
         self.assertFalse(self.cs.STATE_FILE.exists())
 
-    def test_monday_morning_not_affected(self):
-        """State with end=21:00 is inactive at any time after 21:00 same day."""
-        self.cs.save("21:00")
-        self.assertFalse(self.cs.is_active(dt(21, 1)))
-        self.assertFalse(self.cs.is_active(dt(21, 30)))
+    def test_not_active_next_morning(self):
+        """skip_until saved at Sunday 21:00 must not be active on Monday morning.
+
+        Regression test: old code stored only "HH:MM" so 06:34 < 21:00 kept
+        the skip active all next day. Fix stores full ISO datetime.
+        """
+        import json
+        yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
+        end_dt = yesterday.replace(hour=21, minute=0, second=0, microsecond=0)
+        self.cs.STATE_FILE.write_text(json.dumps({"skip_until": end_dt.isoformat()}))
+        self.assertFalse(self.cs.is_active(dt(6, 34)))
+        self.assertFalse(self.cs.STATE_FILE.exists())
 
     def test_state_survives_multiple_reads(self):
         """Reading state multiple times doesn't corrupt it."""
