@@ -10,12 +10,17 @@ Thresholds for ~6kWp system:
   > 300 W/m²   → good solar, battery will recharge naturally
   150-300 W/m² → marginal, apply cloud bonus
   < 150 W/m²   → poor solar, need grid backup
+
+Fallback on API failure:
+  - Use last cached radiation from charge_state if available
+  - Otherwise assume SOLAR_GOOD (sunny) — avoids unnecessary grid charging
+  - Failures are counted and reported once per day via Discord
 """
 import datetime
 import time
 import random
 import requests
-from notifier import notify_warning
+import charge_state
 
 SOLAR_GOOD = 300
 SOLAR_POOR = 150
@@ -49,6 +54,21 @@ def _fetch_with_retry(url, params, retries=5):
     return None
 
 
+def _fallback_radiation() -> float:
+    """Return cached radiation or SOLAR_GOOD, and log appropriately."""
+    cached = charge_state.get_last_radiation()
+    if cached is not None:
+        ts = charge_state.get_last_radiation_ts()
+        age = ""
+        if ts:
+            mins = int((datetime.datetime.now() - ts).total_seconds() / 60)
+            age = f", {mins}min ago"
+        print(f"  Solar   : using cached {cached:.0f} W/m²{age} (API unavailable)")
+        return cached
+    print(f"  Solar   : API unavailable, no cache — assuming sunny ({SOLAR_GOOD} W/m²)")
+    return float(SOLAR_GOOD)
+
+
 def get_solar_forecast(lat: float, lon: float) -> float:
     """Return average shortwave radiation (W/m²) relevant to the current decision.
 
@@ -57,15 +77,13 @@ def get_solar_forecast(lat: float, lon: float) -> float:
     After 18:00:  return SOLAR_GOOD — panels no longer producing regardless of
                   forecast, no point fetching or adding cloud bonus to targets.
 
-    Returns 999 (assume good solar) on forecast failure to avoid unnecessary charging.
+    On failure: returns last cached value, or SOLAR_GOOD if no cache exists.
+    Failures are silently counted; a daily summary is sent to Discord.
     """
     current_hour = datetime.datetime.now().hour
 
     if current_hour >= 18:
         print(f"  Solar   : skipped (after 18:00 — panels not producing)")
-        # Return SOLAR_GOOD to suppress cloud bonus — after 18:00 current SOC
-        # already reflects the full day's solar production, so forecast-based
-        # bonus is meaningless. Targets are set explicitly for evening windows.
         return SOLAR_GOOD
 
     try:
@@ -91,17 +109,28 @@ def get_solar_forecast(lat: float, lon: float) -> float:
             label     = f"hours {current_hour}–{current_hour + len(radiation) - 1} local"
 
         if not radiation:
-            return 999
+            return float(SOLAR_GOOD)
 
         avg     = sum(radiation) / len(radiation)
         quality = "☀️ good" if avg >= SOLAR_GOOD else ("⛅ marginal" if avg >= SOLAR_POOR else "☁️ poor")
         print(f"  Solar   : {avg:.0f} W/m²  ({label}, {len(radiation)}h avg)  {quality}")
+
+        # Persist for fallback use on future failures
+        charge_state.save_radiation(avg)
+
+        # If there were earlier failures today, send one summary now and reset
+        fail_count, fail_date = charge_state.get_weather_failures()
+        if fail_count > 0:
+            from notifier import notify_weather_failures
+            notify_weather_failures(fail_count, fail_date, avg)
+            charge_state.clear_weather_failures()
+
         return avg
 
     except Exception as e:
-        notify_warning(f"Solar forecast failed: {e}")
         print(f"Warning: solar forecast failed ({e})")
-        return 999
+        charge_state.record_weather_failure()
+        return _fallback_radiation()
 
 
 def is_low_solar(radiation: float, winter: bool) -> bool:

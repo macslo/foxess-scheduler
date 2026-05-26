@@ -3,7 +3,8 @@ Discord webhook notifier for FoxESS Grid Charge Scheduler.
 
 Sends embedded messages on:
   - Window state changes (enable/disable)
-  - Errors and warnings
+  - Errors
+  - Daily weather API failure summary (once per day, not per failure)
 
 Silent days = good days. No news means solar handled everything.
 """
@@ -97,11 +98,20 @@ def notify_error(context: str, error: Exception):
     ))
 
 
-def notify_warning(message: str):
-    if not WEBHOOK_URL:
+def notify_weather_failures(count: int, date: str, last_radiation: float | None):
+    """Send a daily summary of weather API failures.
+
+    Called once when the first successful fetch of the day happens after
+    failures, or at end-of-day. Never called per individual failure.
+    """
+    if not WEBHOOK_URL or count == 0:
         return
+
+    cached = f"{last_radiation:.0f} W/m² (cached)" if last_radiation is not None else "none — assumed sunny"
     _send(_embed(
-        title       = "⚠️ FoxESS Scheduler warning",
-        description = message,
+        title       = "⚠️ Weather API — daily failure summary",
+        description = (f"Open-Meteo was unreachable **{count} time(s)** on {date}.\n"
+                       f"Fallback value used: **{cached}**.\n"
+                       f"Charging decisions were not affected."),
         color       = COLOR_YELLOW,
     ))
