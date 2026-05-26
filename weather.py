@@ -25,6 +25,11 @@ import charge_state
 SOLAR_GOOD = 300
 SOLAR_POOR = 150
 
+HTTP_HEADERS = {
+    "User-Agent": "foxess-grid-scheduler/1.0",
+    "Accept": "application/json",
+}
+
 
 def _fetch_with_retry(url, params, retries=5):
     """GET with exponential backoff + random jitter on server errors.
@@ -37,7 +42,7 @@ def _fetch_with_retry(url, params, retries=5):
 
     for i in range(retries):
         try:
-            r = requests.get(url, params=params, timeout=(3, 10))
+            r = requests.get(url, params=params, headers=HTTP_HEADERS, timeout=(3, 10))
             if r.status_code == 200:
                 return r
             if 500 <= r.status_code < 600 or r.status_code == 429:
@@ -92,7 +97,7 @@ def get_solar_forecast(lat: float, lon: float) -> float:
             "longitude":     lon,
             "hourly":        "shortwave_radiation",
             "forecast_days": 1,
-            "timezone":      "auto",
+            "timezone":      "Europe/Warsaw",
         })
 
         if r is None:
