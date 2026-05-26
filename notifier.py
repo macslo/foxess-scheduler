@@ -97,6 +97,14 @@ def notify_error(context: str, error: Exception):
         color       = COLOR_RED,
     ))
 
+def notify_warning(message: str):
+    if not WEBHOOK_URL:
+        return
+    _send(_embed(
+        title       = "⚠️ FoxESS Scheduler warning",
+        description = message,
+        color       = COLOR_YELLOW,
+    ))
 
 def notify_weather_failures(count: int, date: str, last_radiation: float | None):
     """Send a daily summary of weather API failures.
