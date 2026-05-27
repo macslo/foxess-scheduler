@@ -292,9 +292,9 @@ def main():
     print(f"  SOC     : {soc:.1f}%  (morning target={plan.morning_target}%  "
           f"evening target={plan.evening_target}%)")
     print(f"  Window 1: {plan.window1.start}–{plan.window1.end}  -> "
-          f"{windows.window_status(now, plan.window1.enabled, plan.window1.start, plan.window1.end)}")
+          f"{windows.window_status(now, plan.window1.enabled, plan.window1.start, plan.window1.end, force)}")
     print(f"  Window 2: {plan.window2.start}–{plan.window2.end}  -> "
-          f"{windows.window_status(now, plan.window2.enabled, plan.window2.start, plan.window2.end)}")
+          f"{windows.window_status(now, plan.window2.enabled, plan.window2.start, plan.window2.end, force)}")
     print()
 
     _apply(sn, now, ctx, strategy, plan, radiation)

@@ -44,10 +44,12 @@ def near_window(now: datetime.datetime, strategy, ctx) -> bool:
     return False
 
 
-def window_status(now: datetime.datetime, enable, start: str, end: str) -> str:
+def window_status(now: datetime.datetime, enable, start: str, end: str,
+                  force: bool = False) -> str:
     """Human-readable status for a window — used in log output."""
-    if is_closed(now, end):
-        return "FROZEN (window closed)"
-    if is_not_opened_yet(now, start):
-        return "FROZEN (not opened yet)"
+    if not force:
+        if is_closed(now, end):
+            return "FROZEN (window closed)"
+        if is_not_opened_yet(now, start):
+            return "FROZEN (not opened yet)"
     return "ENABLE" if enable else "DISABLE"
