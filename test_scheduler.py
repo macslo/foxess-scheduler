@@ -302,6 +302,80 @@ class TestDynamicWindowTimes(unittest.TestCase):
             _, end = s.get_window2(c)
             self.assertEqual(end, "15:00")
 
+
+    # ── Dynamic window 1 ──────────────────────────────────────────────────────
+
+    def test_window1_before_6_uses_static(self):
+        """Before 06:00 window 1 must use static fallback."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=10.0, pv_kw=0.1)
+        with patch_hour(5):
+            self.assertEqual(s.get_window1(c), ("06:50", "07:00"))
+
+    def test_window1_after_6_uses_dynamic(self):
+        """At 06:00+ with SOC below target, window 1 start is calculated."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=10.0, pv_kw=0.16)
+        with patch_hour(6):
+            start, end = s.get_window1(c)
+            self.assertEqual(end, "07:00")
+            self.assertNotEqual(start, "06:50")   # not static
+
+    def test_window1_soc_at_target_uses_static(self):
+        """SOC already at morning target → static window (no charge needed)."""
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=15.0, pv_kw=0.1)
+        with patch_hour(6):
+            self.assertEqual(s.get_window1(c), ("06:50", "07:00"))
+
+    def test_window1_real_scenario_soc10_pv016(self):
+        """Replay today's log: SOC=10%, PV=0.16kW, target=15% → short window.
+
+        At 5.63kW net rate, 5% of 9.4kWh = ~5 min → start ≥ 06:55.
+        Should not enable from 06:50 and overshoot to 18%.
+        """
+        s = DynamicSummerWeekday()
+        c = ctx(low_solar=False, soc=10.0, pv_kw=0.16)
+        with patch_hour(6):
+            start, end = s.get_window1(c)
+            self.assertEqual(end, "07:00")
+            h, m = map(int, start.split(":"))
+            # Should start after 06:50 — no need for full 10-min static window
+            self.assertGreater(h * 60 + m, 6 * 60 + 50)
+
+    def test_window1_low_soc_starts_earlier(self):
+        """Very low SOC needs more time → earlier start than high SOC."""
+        s   = DynamicSummerWeekday()
+        lo  = ctx(low_solar=False, soc=5.0,  pv_kw=0.1)
+        hi  = ctx(low_solar=False, soc=13.0, pv_kw=0.1)
+        with patch_hour(6):
+            start_lo, _ = s.get_window1(lo)
+            start_hi, _ = s.get_window1(hi)
+            self.assertLessEqual(start_lo, start_hi)
+
+    def test_winter_window1_dynamic_after_6(self):
+        """DynamicWinterWeekday window 1 also uses dynamic start after 06:00."""
+        s = DynamicWinterWeekday()
+        c = ctx(low_solar=False, soc=10.0, pv_kw=0.1, winter=True)
+        with patch_hour(6):
+            start, end = s.get_window1(c)
+            self.assertEqual(end, "07:00")
+            self.assertNotEqual(start, "06:30")   # not static
+
+    def test_window1_falls_back_when_soc_none(self):
+        """No SOC data → static fallback for window 1."""
+        s = DynamicSummerWeekday()
+        c = ChargeContext(low_solar=False, soc=None, pv_kw=0.1, winter=False)
+        with patch_hour(6):
+            self.assertEqual(s.get_window1(c), ("06:50", "07:00"))
+
+    def test_window1_falls_back_when_pv_none(self):
+        """No PV data → static fallback for window 1."""
+        s = DynamicSummerWeekday()
+        c = ChargeContext(low_solar=False, soc=10.0, pv_kw=None, winter=False)
+        with patch_hour(6):
+            self.assertEqual(s.get_window1(c), ("06:50", "07:00"))
+
     def test_dynamic_inherits_sunday_evening(self):
         """DynamicSummerWeekend should also get Sunday evening window."""
         s = DynamicSummerWeekend()

@@ -176,37 +176,38 @@ class WinterWeekend(ChargeStrategy):
 
 
 # ── Dynamic strategies (g13s_dynamic tariff) ─────────────────────────────────
-# Inherit static windows as fallback, override get_window2() to calculate
+# Inherit static windows as fallback, override get_window1/2() to calculate
 # start time dynamically from current SOC and PV output.
 
-def _dynamic_window2_start(ctx: ChargeContext, end_time: str, target: int) -> str:
-    """Calculate window 2 start time based on current SOC and PV output.
+def _dynamic_window_start(ctx: ChargeContext, end_time: str, target: int,
+                           earliest_hour: int = 6) -> str | None:
+    """Calculate window start time based on current SOC and PV output.
 
     Uses actual battery charge rate accounting for PV contribution:
       net_rate = BATTERY_CHARGE_RATE - pv_kw  (PV covers house load)
       minutes  = (target - soc) × BATTERY_KWH / net_rate × 60 / 100
       start    = end_time - minutes × SAFETY_MARGIN
 
-    Falls back to static window if SOC/PV unavailable.
+    Returns None to signal static fallback when:
+      - SOC or PV data unavailable
+      - SOC already at or above target
     """
     if ctx.soc is None or ctx.pv_kw is None:
-        return None  # signal to use static fallback
+        return None
 
     soc_needed = max(target - ctx.soc, 0)
     if soc_needed <= 0:
-        return None  # already at target, static window fine
+        return None
 
-    # Net charge rate to battery — PV offsets house load, not directly battery
     net_rate = max(cfg.BATTERY_CHARGE_RATE_KW - ctx.pv_kw, 1.0)
     minutes  = soc_needed * cfg.BATTERY_KWH / net_rate * 60 / 100
     minutes *= cfg.CHARGE_SAFETY_MARGIN
 
-    h, m   = map(int, end_time.split(":"))
-    end_dt = datetime.datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+    h, m     = map(int, end_time.split(":"))
+    end_dt   = datetime.datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
     start_dt = end_dt - datetime.timedelta(minutes=int(minutes))
 
-    # Don't start before 06:00 to avoid charging during night rate
-    earliest = end_dt.replace(hour=6, minute=0)
+    earliest = end_dt.replace(hour=earliest_hour, minute=0)
     if start_dt < earliest:
         start_dt = earliest
 
@@ -219,6 +220,19 @@ def _dynamic_window2_start(ctx: ChargeContext, end_time: str, target: int) -> st
 class DynamicSummerWeekday(SummerWeekday):
     name = "G13s DYNAMIC SUMMER weekday"
 
+    def get_window1(self, ctx: ChargeContext) -> tuple[str, str]:
+        end   = "07:00"
+        now_h = datetime.datetime.now().hour
+        # Calculate dynamically from 06:00 onward — first run near this window
+        # is at 06:46 (LEAD_MINUTES=3 before 06:50), so SOC/PV are available.
+        if now_h < 6 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window1(ctx)
+        target = self.morning_target(ctx)
+        start  = _dynamic_window_start(ctx, end, target, earliest_hour=6)
+        if start is None:
+            return super().get_window1(ctx)
+        return start, end
+
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
         end   = "17:00"
         now_h = datetime.datetime.now().hour
@@ -227,7 +241,7 @@ class DynamicSummerWeekday(SummerWeekday):
         if now_h < 13 or ctx.soc is None or ctx.pv_kw is None:
             return super().get_window2(ctx)
         target = self.evening_target(ctx)
-        start  = _dynamic_window2_start(ctx, end, target)
+        start  = _dynamic_window_start(ctx, end, target)
         if start is None:
             return super().get_window2(ctx)
         return start, end
@@ -244,7 +258,7 @@ class DynamicSummerWeekend(SummerWeekend):
         if now_h < 13 or ctx.soc is None or ctx.pv_kw is None:
             return super().get_window2(ctx)
         target = self.evening_target(ctx)
-        start  = _dynamic_window2_start(ctx, end, target)
+        start  = _dynamic_window_start(ctx, end, target)
         if start is None:
             return super().get_window2(ctx)
         return start, end
@@ -252,6 +266,18 @@ class DynamicSummerWeekend(SummerWeekend):
 
 class DynamicWinterWeekday(WinterWeekday):
     name = "G13s DYNAMIC WINTER weekday"
+
+    def get_window1(self, ctx: ChargeContext) -> tuple[str, str]:
+        end   = "07:00"
+        now_h = datetime.datetime.now().hour
+        # Winter window 1 ends at 07:00 — guard at 06:00, same as summer
+        if now_h < 6 or ctx.soc is None or ctx.pv_kw is None:
+            return super().get_window1(ctx)
+        target = self.morning_target(ctx)
+        start  = _dynamic_window_start(ctx, end, target, earliest_hour=6)
+        if start is None:
+            return super().get_window1(ctx)
+        return start, end
 
     def get_window2(self, ctx: ChargeContext) -> tuple[str, str]:
         end   = "15:00"
@@ -261,7 +287,7 @@ class DynamicWinterWeekday(WinterWeekday):
         if now_h < 10 or ctx.soc is None or ctx.pv_kw is None:
             return super().get_window2(ctx)
         target = self.evening_target(ctx)
-        start  = _dynamic_window2_start(ctx, end, target)
+        start  = _dynamic_window_start(ctx, end, target)
         if start is None:
             return super().get_window2(ctx)
         return start, end
@@ -276,7 +302,7 @@ class DynamicWinterWeekend(WinterWeekend):
         if now_h < 10 or ctx.soc is None or ctx.pv_kw is None:
             return super().get_window2(ctx)
         target = self.evening_target(ctx)
-        start  = _dynamic_window2_start(ctx, end, target)
+        start  = _dynamic_window_start(ctx, end, target)
         if start is None:
             return super().get_window2(ctx)
         return start, end
