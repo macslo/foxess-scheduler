@@ -29,6 +29,6 @@ class ChargePlan:
 @dataclass
 class ProximityResult:
     should_run: bool
-    radiation: int | None = None
+    radiation: float | None = None
     low_solar: bool | None = None
     skip_reason: str | None = None

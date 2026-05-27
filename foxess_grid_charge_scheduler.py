@@ -228,17 +228,25 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
 
 
 def _update_charge_state(plan: ChargePlan):
-    """Persist sent windows, and separately mark target=100% skip windows."""
+    """Persist sent windows, and separately mark target=100% skip windows.
+
+    A window qualifies for skip if it is enabled AND its target is 100%
+    (FoxESS self-manages the charge limit and will stop when full).
+    Each window is evaluated independently so mixed-target plans
+    (e.g. morning_target=100 + evening_target=85) are handled correctly.
+    """
     w1 = plan.window1
     w2 = plan.window2
     charge_state.save_windows(w1.start, w1.end, w1.enabled, w2.start, w2.end, w2.enabled)
 
-    if w1.enabled and not w2.enabled and plan.morning_target == 100:
-        charge_state.save_skip(w1.end)
-    elif w2.enabled and not w1.enabled and plan.evening_target == 100:
-        charge_state.save_skip(w2.end)
-    elif w1.enabled and w2.enabled and plan.morning_target == 100 and plan.evening_target == 100:
-        charge_state.save_skip(max(w1.end, w2.end))
+    skip_end = None
+    if w1.enabled and plan.morning_target == 100:
+        skip_end = w1.end
+    if w2.enabled and plan.evening_target == 100:
+        skip_end = max(skip_end, w2.end) if skip_end else w2.end
+
+    if skip_end:
+        charge_state.save_skip(skip_end)
     else:
         charge_state.clear_skip()
 

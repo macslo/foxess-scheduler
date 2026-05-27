@@ -9,7 +9,7 @@ The script selects a **charging strategy** based on season and day type, then de
 - **Current battery SOC** — charges only if battery is below the target for the upcoming peak block
 - **Season** (summer/winter) and **day type** (weekday/weekend) — G13s has different peak hours and no true peak on weekends
 - **Solar forecast** — uses shortwave radiation (W/m²) from Open-Meteo; skipped after 18:00 when panels no longer produce
-- **Dynamic windows** (`g13s_dynamic`) — calculates evening window start from current SOC + PV output at runtime
+- **Dynamic windows** (`g13s_dynamic`) — calculates both morning and evening window start times from current SOC + PV output at runtime
 - **Window proximity** — only runs fully when within a few minutes of a window start; all other runs exit instantly
 - **Window freeze** — once a window's end time passes, its state is no longer touched to avoid spurious changes
 - **Charge state** — when a window is enabled at target=100%, subsequent runs skip all API calls until the window ends; FoxESS manages the charge limit itself
@@ -50,7 +50,7 @@ Prices from official Tauron PDF (12/2025). Total = sales + distribution variable
 
 ### Charge windows
 
-Windows are **dynamic** — start time depends on solar forecast and (in `g13s_dynamic`) current SOC + PV output. On cloudy days the battery charge rate to battery is ~5.63 kW (rest covers house load), so more time is needed.
+Windows are **dynamic** — start time depends on solar forecast and (in `g13s_dynamic`) current SOC + PV output for both morning and evening windows. On cloudy days the battery charge rate to battery is ~5.63 kW (rest covers house load), so more time is needed.
 
 | Strategy | Window 1 ☀️ clear | Window 1 ☁️ cloudy | Window 2 ☀️ clear | Window 2 ☁️ cloudy |
 |----------|------------------|------------------|------------------|------------------|
@@ -134,7 +134,7 @@ FOXESS_DISCORD_WEBHOOK=
 
 | Value | Description |
 |-------|-------------|
-| `g13s_dynamic` | **Default. Recommended.** Tauron G13s with dynamic evening window. Calculates window 2 start time from current SOC + PV output at runtime. Falls back to static windows before afternoon or when data is unavailable. |
+| `g13s_dynamic` | **Default. Recommended.** Tauron G13s with dynamic windows. Calculates both morning and evening window start times from current SOC + PV output at runtime. Falls back to static windows before the active calculation period or when data is unavailable. |
 | `g13s` | Tauron G13s with fixed windows based on solar forecast only. Simpler — no PV reading needed. Use if `pvPower` is unavailable on your inverter model. |
 | `manual` | User-defined windows via `FOXESS_CHARGE1_*` / `FOXESS_CHARGE2_*` vars. No SOC targets, no solar logic — windows follow enable policy only. |
 

@@ -101,6 +101,8 @@ def get_battery_soc(sn: str) -> float | None:
             return None
         return float(datas[0].get("value", 0))
     except Exception as e:
+        # Note: notify_warning fires per failure here — acceptable since FoxESS API
+        # has built-in 3-retry backoff and SOC failures are rare in practice.
         notify_warning(f"Failed to read SOC: {e}")
         print(f"Warning: failed to read SOC ({e})")
     return None
@@ -124,6 +126,8 @@ def get_device_data(sn: str) -> tuple[float | None, float | None]:
         print(f"  SOC     : {soc:.1f}%  PV: {pv_kw:.2f} kW")
         return soc, pv_kw
     except Exception as e:
+        # Note: notify_warning fires per failure here — acceptable since FoxESS API
+        # has built-in 3-retry backoff and device data failures are rare in practice.
         notify_warning(f"Failed to read device data: {e}")
         print(f"Warning: failed to read device data ({e})")
     return None, None

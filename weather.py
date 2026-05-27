@@ -97,7 +97,7 @@ def get_solar_forecast(lat: float, lon: float) -> float:
             "longitude":     lon,
             "hourly":        "shortwave_radiation",
             "forecast_days": 1,
-            "timezone":      "Europe/Warsaw",
+            "timezone":      "auto",  # auto = Open-Meteo infers from lat/lon
         })
 
         if r is None:
