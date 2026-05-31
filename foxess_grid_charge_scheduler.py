@@ -219,8 +219,8 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
             changed = True
 
         _update_charge_state(plan)
-        _record_savings(plan, already1, already2, ctx.soc, ctx.winter,
-                         weekend, strategy.name)
+        _update_pending_sessions(plan, already1, already2, ctx.soc, ctx.winter,
+                                  weekend, strategy.name)
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)
@@ -254,16 +254,30 @@ def _update_charge_state(plan: ChargePlan):
         charge_state.clear_skip()
 
 
-def _record_savings(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
-                    soc: float | None, winter: bool, weekend: bool,
-                    strategy_name: str) -> None:
-    """Record a session when a window transitions from enabled → disabled."""
+def _update_pending_sessions(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
+                             soc: float | None, winter: bool, weekend: bool,
+                             strategy_name: str) -> None:
+    """Track charge sessions via charge_state pending markers.
+
+    enable  (False → True):  save_pending_session — record start/end/soc
+    disable (True  → False): record_session from pending data, then clear
+    """
     w1, w2 = plan.window1, plan.window2
-    # Window was on, now off (or frozen) → session completed
-    if prev_enabled1 and not w1.enabled:
-        savings.record_session(1, w1.start, w1.end, soc, winter, strategy_name, weekend)
-    if prev_enabled2 and not w2.enabled:
-        savings.record_session(2, w2.start, w2.end, soc, winter, strategy_name, weekend)
+
+    for idx, window, prev_enabled in [(1, w1, prev_enabled1), (2, w2, prev_enabled2)]:
+        if not prev_enabled and window.enabled:
+            # Window just enabled — save pending so we can record on disable
+            charge_state.save_pending_session(idx, window.start, window.end, soc)
+
+        elif prev_enabled and not window.enabled:
+            # Window just disabled — record session from pending data
+            pending = charge_state.get_pending_session(idx)
+            if pending:
+                savings.record_session(
+                    idx, pending["start"], pending["end"], pending["soc"],
+                    winter, strategy_name, weekend,
+                )
+                charge_state.clear_pending_session(idx)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────

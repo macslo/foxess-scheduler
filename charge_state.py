@@ -142,6 +142,31 @@ def clear_weather_failures():
     _write(data)
 
 
+# ── pending session ──────────────────────────────────────────────────────────
+
+def save_pending_session(idx: int, start: str, end: str, soc: float | None):
+    """Mark that window idx was just enabled — store start/end/soc for later.
+
+    Called when a window transitions disabled → enabled so we can record
+    the session duration accurately when it's later disabled.
+    """
+    data = _read()
+    data[f"pending{idx}"] = {"start": start, "end": end, "soc": soc}
+    _write(data)
+
+
+def get_pending_session(idx: int) -> dict | None:
+    """Return pending session for window idx, or None if not set."""
+    return _read().get(f"pending{idx}")
+
+
+def clear_pending_session(idx: int):
+    """Clear pending session for window idx after it has been recorded."""
+    data = _read()
+    data.pop(f"pending{idx}", None)
+    _write(data)
+
+
 # ── full clear ────────────────────────────────────────────────────────────────
 
 def clear():
