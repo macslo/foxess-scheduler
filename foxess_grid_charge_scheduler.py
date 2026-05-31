@@ -286,10 +286,7 @@ def main():
     force = "--force" in sys.argv
     print(f"[RUN] {now.isoformat()}{' [FORCED]' if force else ''}")
 
-    if _should_skip_early(now, force):
-        sys.exit(0)
-
-    # ── Savings report mode ──────────────────────────────────────────────────
+    # ── Savings report mode — handle before any skip checks ─────────────────
     savings_arg = next((a for a in sys.argv[1:] if a.startswith("--savings")), None)
     if savings_arg:
         period = savings_arg.split("=")[1] if "=" in savings_arg else "30d"
@@ -299,6 +296,10 @@ def main():
         if embed:
             _send(embed)
         sys.exit(0)
+
+    if _should_skip_early(now, force):
+        sys.exit(0)
+
 
     today    = now.date()
     strategy = strategies.get_strategy(today, cfg.TARIFF)
