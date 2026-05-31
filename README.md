@@ -78,6 +78,7 @@ charge_state.py                  ← persist active window state between cron ru
 config.py                        ← all tunable settings (committed to repo)
 .env                             ← secrets only — never committed
 .env.example                     ← template for .env
+savings.py                       ← estimated savings tracker (SQLite)
 test_scheduler.py                ← unit tests
 run.sh                           ← runs the scheduler (called by cron)
 update.sh                        ← git pull from GitHub (called by cron daily)
@@ -285,6 +286,50 @@ Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, 
 Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production. On cloudy days the target reaches 100% — FoxESS handles this safely and simply stops charging when full.
 
 To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh × usable_fraction / 100)`
+
+---
+
+## Savings tracking
+
+The scheduler records each grid charge session and estimates how much was saved
+vs paying the peak rate. Data is stored in `.savings.db` (SQLite, auto-created).
+
+```bash
+# Last 30 days (default)
+python3 foxess_grid_charge_scheduler.py --savings=30d
+
+# Last 7 days
+python3 foxess_grid_charge_scheduler.py --savings=7d
+
+# Specific month
+python3 foxess_grid_charge_scheduler.py --savings=2026-05
+
+# All time
+python3 foxess_grid_charge_scheduler.py --savings=all
+```
+
+Each `--savings` run also sends a summary embed to Discord (if webhook is configured).
+
+**Example output:**
+```
+════════════════════════════════════════════════════
+  Savings report — 7d
+════════════════════════════════════════════════════
+  Sessions  : 4
+  kWh       : 22.14 kWh
+  Saved     : 11.83 zł
+────────────────────────────────────────────────────
+  2026-05-27  w1  06:56–07:00   4min  0.38kWh  0.29zł  SOC=10%
+  2026-05-27  w2  15:45–17:00  75min  7.04kWh  5.35zł  SOC=28%
+  2026-05-30  w2  14:20–15:00  40min  3.75kWh  0.78zł  SOC=60%
+  2026-05-31  w1  20:00–21:00  60min  5.63kWh  2.62zł  SOC=77%
+════════════════════════════════════════════════════
+```
+
+**Savings formula:** `duration_min / 60 × BATTERY_CHARGE_RATE_KW × (peak_rate − charge_rate)`
+
+Rates are taken from the full G13s tariff table — correct pair selected per season,
+day type and window slot. All rates overridable via `FOXESS_PRICE_*` env vars.
 
 ---
 

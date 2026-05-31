@@ -41,6 +41,7 @@ import windows
 import strategies
 import notifier
 import charge_state
+import savings
 from proximity import proximity_check, window_in_progress
 from scheduler_models import ChargeContext, ChargePlan, ChargeWindow
 
@@ -218,6 +219,8 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
             changed = True
 
         _update_charge_state(plan)
+        _record_savings(plan, already1, already2, ctx.soc, ctx.winter,
+                         today.weekday() >= 5, strategy.name)
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)
@@ -251,13 +254,36 @@ def _update_charge_state(plan: ChargePlan):
         charge_state.clear_skip()
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def _record_savings(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
+                    soc: float | None, winter: bool, weekend: bool,
+                    strategy_name: str) -> None:
+    """Record a session when a window transitions from enabled → disabled."""
+    w1, w2 = plan.window1, plan.window2
+    # Window was on, now off (or frozen) → session completed
+    if prev_enabled1 and not w1.enabled:
+        savings.record_session(1, w1.start, w1.end, soc, winter, strategy_name, weekend)
+    if prev_enabled2 and not w2.enabled:
+        savings.record_session(2, w2.start, w2.end, soc, winter, strategy_name, weekend)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────────
 def main():
     now   = datetime.datetime.now()
     force = "--force" in sys.argv
     print(f"[RUN] {now.isoformat()}{' [FORCED]' if force else ''}")
 
     if _should_skip_early(now, force):
+        sys.exit(0)
+
+    # ── Savings report mode ──────────────────────────────────────────────────
+    savings_arg = next((a for a in sys.argv[1:] if a.startswith("--savings")), None)
+    if savings_arg:
+        period = savings_arg.split("=")[1] if "=" in savings_arg else "30d"
+        savings.print_report(period)
+        from notifier import _send
+        embed = savings.discord_report(period)
+        if embed:
+            _send(embed)
         sys.exit(0)
 
     today    = now.date()
