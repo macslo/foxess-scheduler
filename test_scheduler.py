@@ -969,6 +969,214 @@ class TestProximityCheck(unittest.TestCase):
         mock_forecast.assert_called_once_with(51.5, 19.3)
 
 
+
+
+# ── Savings tracker ───────────────────────────────────────────────────────────
+import os, tempfile, pathlib
+os.environ.setdefault("FOXESS_BATTERY_CHARGE_RATE_KW", "5.63")
+os.environ.setdefault("FOXESS_BATTERY_KWH", "9.4")
+os.environ.setdefault("FOXESS_TARIFF", "g13s_dynamic")
+import savings as _savings_module
+
+
+class TestSavingsRates(unittest.TestCase):
+    """Tests for _rates() — correct price pair per season/day/slot."""
+
+    def _r(self, winter, weekend, start):
+        return _savings_module._rates(winter, weekend, start)
+
+    def test_summer_weekday_window1(self):
+        """Window 1 morning: charges at summer cheap, avoids summer peak."""
+        charge, peak = self._r(winter=False, weekend=False, start="06:50")
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_CHEAP)
+        self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
+
+    def test_summer_weekday_window2(self):
+        """Window 2 afternoon: charges at summer cheap, avoids summer peak."""
+        charge, peak = self._r(winter=False, weekend=False, start="15:45")
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_CHEAP)
+        self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
+
+    def test_winter_weekday_window1(self):
+        """Winter weekday morning: charges at midday rate, avoids winter peak."""
+        charge, peak = self._r(winter=True, weekend=False, start="06:30")
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_MIDDAY)
+        self.assertEqual(peak,   _savings_module.PRICE_WINTER_WD_PEAK)
+
+    def test_winter_weekday_window2(self):
+        """Winter weekday midday: charges at midday rate, avoids winter peak."""
+        charge, peak = self._r(winter=True, weekend=False, start="13:00")
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_MIDDAY)
+        self.assertEqual(peak,   _savings_module.PRICE_WINTER_WD_PEAK)
+
+    def test_summer_weekend_window2(self):
+        """Summer weekend: charges at very cheap rate, avoids neutral."""
+        charge, peak = self._r(winter=False, weekend=True, start="16:20")
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WE_CHEAPEST)
+        self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WE_NEUTRAL)
+
+    def test_winter_weekend_window2(self):
+        """Winter weekend: charges at cheapest midday, avoids neutral."""
+        charge, peak = self._r(winter=True, weekend=True, start="14:20")
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WE_CHEAPEST)
+        self.assertEqual(peak,   _savings_module.PRICE_WINTER_WE_NEUTRAL)
+
+    def test_sunday_evening_summer(self):
+        """Sunday evening (20:00) summer: night rate, avoids Monday peak."""
+        charge, peak = self._r(winter=False, weekend=True, start="20:00")
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_NIGHT)
+        self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
+
+    def test_sunday_evening_winter(self):
+        """Sunday evening (20:00) winter: night rate, avoids Monday peak."""
+        charge, peak = self._r(winter=True, weekend=True, start="20:00")
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_NIGHT)
+        self.assertEqual(peak,   _savings_module.PRICE_WINTER_WD_PEAK)
+
+    def test_charge_always_less_than_peak(self):
+        """Charge rate must always be lower than peak rate — otherwise no saving."""
+        scenarios = [
+            (False, False, "06:50"),
+            (False, False, "15:30"),
+            (True,  False, "06:30"),
+            (True,  False, "13:00"),
+            (False, True,  "16:20"),
+            (True,  True,  "14:20"),
+            (False, True,  "20:00"),
+            (True,  True,  "20:00"),
+        ]
+        for winter, weekend, start in scenarios:
+            charge, peak = self._r(winter, weekend, start)
+            self.assertLess(charge, peak,
+                msg=f"charge {charge} >= peak {peak} for winter={winter} weekend={weekend} start={start}")
+
+
+class TestSavingsRecord(unittest.TestCase):
+    """Tests for record_session() and query_savings() with isolated DB."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self._orig_db = _savings_module.DB_FILE
+        _savings_module.DB_FILE = pathlib.Path(self._tmp.name)
+
+    def tearDown(self):
+        _savings_module.DB_FILE = self._orig_db
+        pathlib.Path(self._tmp.name).unlink(missing_ok=True)
+
+    def _record(self, start="06:56", end="07:00", soc=10.0,
+                winter=False, weekend=False, window=1):
+        _savings_module.record_session(
+            window, start, end, soc, winter,
+            "G13s DYNAMIC SUMMER weekday", weekend
+        )
+
+    def test_record_and_retrieve(self):
+        """Recorded session appears in query_savings('all')."""
+        self._record()
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(len(sessions), 1)
+        s = sessions[0]
+        self.assertEqual(s.window, 1)
+        self.assertEqual(s.start_time, "06:56")
+        self.assertEqual(s.end_time, "07:00")
+        self.assertEqual(s.duration_min, 4)
+        self.assertAlmostEqual(s.kwh, 4/60 * 5.63, places=2)
+
+    def test_duration_zero_not_recorded(self):
+        """Session with end == start is silently dropped."""
+        self._record(start="07:00", end="07:00")
+        self.assertEqual(len(_savings_module.query_savings("all")), 0)
+
+    def test_duration_negative_not_recorded(self):
+        """Session with end < start is silently dropped."""
+        self._record(start="07:05", end="07:00")
+        self.assertEqual(len(_savings_module.query_savings("all")), 0)
+
+    def test_soc_none_recorded(self):
+        """soc_start=None is stored and retrieved as None."""
+        _savings_module.record_session(
+            1, "06:56", "07:00", None, False, "test", False
+        )
+        s = _savings_module.query_savings("all")[0]
+        self.assertIsNone(s.soc_start)
+
+    def test_saved_pln_positive(self):
+        """Saving must be positive (cheap rate < peak rate)."""
+        self._record()
+        s = _savings_module.query_savings("all")[0]
+        self.assertGreater(s.saved_pln, 0)
+
+    def test_kwh_calculation(self):
+        """60 min at 5.63 kW = 5.63 kWh."""
+        self._record(start="16:00", end="17:00", window=2)
+        s = _savings_module.query_savings("all")[0]
+        self.assertAlmostEqual(s.kwh, 5.63, places=2)
+
+    def test_multiple_sessions_all(self):
+        """Multiple sessions all returned by 'all'."""
+        self._record(start="06:56", end="07:00", window=1)
+        self._record(start="15:45", end="17:00", window=2)
+        self.assertEqual(len(_savings_module.query_savings("all")), 2)
+
+    def test_query_by_month(self):
+        """YYYY-MM filter returns only matching month."""
+        self._record()
+        now = datetime.datetime.now()
+        month = now.strftime("%Y-%m")
+        wrong_month = (now.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+        self.assertEqual(len(_savings_module.query_savings(month)), 1)
+        self.assertEqual(len(_savings_module.query_savings(wrong_month)), 0)
+
+    def test_query_7d(self):
+        """'7d' returns today's session."""
+        self._record()
+        self.assertEqual(len(_savings_module.query_savings("7d")), 1)
+
+    def test_query_unknown_period(self):
+        """Unknown period string returns empty list, no crash."""
+        self._record()
+        result = _savings_module.query_savings("bogus")
+        self.assertEqual(result, [])
+
+
+class TestSavingsSummary(unittest.TestCase):
+    """Tests for savings_summary() aggregation."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self._orig_db = _savings_module.DB_FILE
+        _savings_module.DB_FILE = pathlib.Path(self._tmp.name)
+
+    def tearDown(self):
+        _savings_module.DB_FILE = self._orig_db
+        pathlib.Path(self._tmp.name).unlink(missing_ok=True)
+
+    def test_empty_summary(self):
+        """No sessions → summary with zeros."""
+        s = _savings_module.savings_summary("all")
+        self.assertEqual(s["sessions"], 0)
+        self.assertEqual(s["kwh"], 0.0)
+        self.assertEqual(s["saved_pln"], 0.0)
+
+    def test_summary_aggregates_correctly(self):
+        """kwh and saved_pln are sums across all sessions."""
+        _savings_module.record_session(1, "06:56", "07:00", 10.0, False, "test", False)
+        _savings_module.record_session(2, "15:45", "17:00", 28.0, False, "test", False)
+        s = _savings_module.savings_summary("all")
+        self.assertEqual(s["sessions"], 2)
+        sessions = s["sessions_detail"]
+        self.assertAlmostEqual(s["kwh"],      sum(x.kwh for x in sessions),      places=2)
+        self.assertAlmostEqual(s["saved_pln"], sum(x.saved_pln for x in sessions), places=2)
+
+    def test_summary_contains_sessions_detail(self):
+        """Non-empty summary includes sessions_detail list."""
+        _savings_module.record_session(1, "06:56", "07:00", 10.0, False, "test", False)
+        s = _savings_module.savings_summary("all")
+        self.assertIn("sessions_detail", s)
+        self.assertEqual(len(s["sessions_detail"]), 1)
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(sys.modules[__name__])
