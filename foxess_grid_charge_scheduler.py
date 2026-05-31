@@ -195,7 +195,7 @@ def _notify_run(sn, ctx, strategy, plan: ChargePlan, radiation, changed: bool) -
     )
 
 
-def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
+def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -> None:
     """Read current state, apply changes if needed, save state and notify."""
     changed = False
     try:
@@ -220,7 +220,7 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation) -> None:
 
         _update_charge_state(plan)
         _record_savings(plan, already1, already2, ctx.soc, ctx.winter,
-                         today.weekday() >= 5, strategy.name)
+                         weekend, strategy.name)
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)
@@ -323,7 +323,7 @@ def main():
           f"{windows.window_status(now, plan.window2.enabled, plan.window2.start, plan.window2.end, force)}")
     print()
 
-    _apply(sn, now, ctx, strategy, plan, radiation)
+    _apply(sn, now, ctx, strategy, plan, radiation, weekend=today.weekday() >= 5)
 
 
 if __name__ == "__main__":
