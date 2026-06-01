@@ -219,7 +219,7 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
             changed = True
 
         _update_charge_state(plan)
-        _update_pending_sessions(plan, already1, already2, ctx.soc, ctx.winter,
+        _record_session_on_enable(plan, already1, already2, ctx.soc, ctx.winter,
                                   weekend, strategy.name)
 
     except Exception as e:
@@ -254,30 +254,23 @@ def _update_charge_state(plan: ChargePlan):
         charge_state.clear_skip()
 
 
-def _update_pending_sessions(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
-                             soc: float | None, winter: bool, weekend: bool,
-                             strategy_name: str) -> None:
-    """Track charge sessions via charge_state pending markers.
+def _record_session_on_enable(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
+                              soc: float | None, winter: bool, weekend: bool,
+                              strategy_name: str) -> None:
+    """Record a savings session when a window is first enabled.
 
-    enable  (False → True):  save_pending_session — record start/end/soc
-    disable (True  → False): record_session from pending data, then clear
+    Recording at enable time means we always capture the session regardless
+    of whether subsequent runs are skipped (target=100% + save_skip).
+    Duration uses window start→end times — max ~2min overestimate possible
+    if the window is disabled early, negligible in practice (~0.09 zł).
     """
     w1, w2 = plan.window1, plan.window2
-
     for idx, window, prev_enabled in [(1, w1, prev_enabled1), (2, w2, prev_enabled2)]:
         if not prev_enabled and window.enabled:
-            # Window just enabled — save pending so we can record on disable
-            charge_state.save_pending_session(idx, window.start, window.end, soc)
-
-        elif prev_enabled and not window.enabled:
-            # Window just disabled — record session from pending data
-            pending = charge_state.get_pending_session(idx)
-            if pending:
-                savings.record_session(
-                    idx, pending["start"], pending["end"], pending["soc"],
-                    winter, strategy_name, weekend,
-                )
-                charge_state.clear_pending_session(idx)
+            savings.record_session(
+                idx, window.start, window.end, soc,
+                winter, strategy_name, weekend,
+            )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────

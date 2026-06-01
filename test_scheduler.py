@@ -668,61 +668,6 @@ class TestChargeState(unittest.TestCase):
         self.assertTrue(self.cs.is_active(dt(20, 0)))
 
 
-    def test_save_and_get_pending_session(self):
-        """Saved pending session is retrievable."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        p = self.cs.get_pending_session(1)
-        self.assertEqual(p["start"], "06:56")
-        self.assertEqual(p["end"],   "07:00")
-        self.assertEqual(p["soc"],   10.0)
-
-    def test_pending_session_independent_per_window(self):
-        """Window 1 and window 2 pending sessions are stored independently."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        self.cs.save_pending_session(2, "15:45", "17:00", 28.0)
-        self.assertEqual(self.cs.get_pending_session(1)["start"], "06:56")
-        self.assertEqual(self.cs.get_pending_session(2)["start"], "15:45")
-
-    def test_clear_pending_session(self):
-        """Cleared pending session returns None."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        self.cs.clear_pending_session(1)
-        self.assertIsNone(self.cs.get_pending_session(1))
-
-    def test_clear_pending_keeps_other_window(self):
-        """Clearing window 1 pending does not affect window 2."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        self.cs.save_pending_session(2, "15:45", "17:00", 28.0)
-        self.cs.clear_pending_session(1)
-        self.assertIsNone(self.cs.get_pending_session(1))
-        self.assertIsNotNone(self.cs.get_pending_session(2))
-
-    def test_clear_nonexistent_pending_is_safe(self):
-        """Clearing a pending session that was never set does not raise."""
-        self.cs.clear_pending_session(1)  # should not raise
-
-    def test_pending_session_none_when_not_set(self):
-        """get_pending_session returns None when nothing was saved."""
-        self.assertIsNone(self.cs.get_pending_session(1))
-        self.assertIsNone(self.cs.get_pending_session(2))
-
-    def test_pending_session_soc_none(self):
-        """soc=None is stored and retrieved correctly."""
-        self.cs.save_pending_session(2, "15:45", "17:00", None)
-        self.assertIsNone(self.cs.get_pending_session(2)["soc"])
-
-    def test_pending_survives_skip_save(self):
-        """Saving skip state does not erase pending session."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        self.cs.save_skip("07:00")
-        self.assertIsNotNone(self.cs.get_pending_session(1))
-
-    def test_pending_survives_windows_save(self):
-        """Saving window config does not erase pending session."""
-        self.cs.save_pending_session(1, "06:56", "07:00", 10.0)
-        self.cs.save_windows("06:56", "07:00", True, "16:20", "17:00", False)
-        self.assertIsNotNone(self.cs.get_pending_session(1))
-
     def test_save_windows_records_last_api_config(self):
         """Last sent windows are stored independently from skip state."""
         self.cs.save_windows("06:50", "07:00", True, "16:12", "17:00", True)
