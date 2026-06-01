@@ -257,20 +257,31 @@ def _update_charge_state(plan: ChargePlan):
 def _record_session_on_enable(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
                               soc: float | None, winter: bool, weekend: bool,
                               strategy_name: str) -> None:
-    """Record a savings session when a window is first enabled.
+    """Record a savings session when we first enable a window.
 
-    Recording at enable time means we always capture the session regardless
-    of whether subsequent runs are skipped (target=100% + save_skip).
-    Duration uses window start→end times — max ~2min overestimate possible
-    if the window is disabled early, negligible in practice (~0.09 zł).
+    Uses charge_state.mark_enabled/was_enabled_by_us to detect the first
+    enable reliably — even if the window stays enabled across multiple cron
+    runs or overnight into the next day.
+
+    enable  (API=False → plan=True, first time): record + mark
+    already enabled by us + still on:            skip (already recorded)
+    disable (was enabled by us → plan=False):    clear marker
     """
     w1, w2 = plan.window1, plan.window2
     for idx, window, prev_enabled in [(1, w1, prev_enabled1), (2, w2, prev_enabled2)]:
-        if not prev_enabled and window.enabled:
+        we_enabled = charge_state.was_enabled_by_us(idx)
+
+        if not we_enabled and window.enabled:
+            # First time we enable this window — record and mark
             savings.record_session(
                 idx, window.start, window.end, soc,
                 winter, strategy_name, weekend,
             )
+            charge_state.mark_enabled(idx)
+
+        elif we_enabled and not window.enabled:
+            # We disabled it (or it was frozen) — clear marker
+            charge_state.clear_enabled(idx)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────

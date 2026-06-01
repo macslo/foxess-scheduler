@@ -142,6 +142,27 @@ def clear_weather_failures():
     _write(data)
 
 
+# ── enabled-by-us markers ────────────────────────────────────────────────────
+
+def mark_enabled(idx: int):
+    """Record that we (the scheduler) enabled window idx."""
+    data = _read()
+    data[f"we_enabled{idx}"] = True
+    _write(data)
+
+
+def clear_enabled(idx: int):
+    """Clear the enabled marker for window idx."""
+    data = _read()
+    data.pop(f"we_enabled{idx}", None)
+    _write(data)
+
+
+def was_enabled_by_us(idx: int) -> bool:
+    """Return True if we enabled window idx in a previous run."""
+    return bool(_read().get(f"we_enabled{idx}", False))
+
+
 # ── full clear ────────────────────────────────────────────────────────────────
 
 def clear():

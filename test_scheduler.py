@@ -668,6 +668,48 @@ class TestChargeState(unittest.TestCase):
         self.assertTrue(self.cs.is_active(dt(20, 0)))
 
 
+
+    def test_mark_and_was_enabled_by_us(self):
+        """mark_enabled sets the flag, was_enabled_by_us returns True."""
+        self.cs.mark_enabled(1)
+        self.assertTrue(self.cs.was_enabled_by_us(1))
+
+    def test_was_enabled_by_us_false_when_not_set(self):
+        """was_enabled_by_us returns False when never marked."""
+        self.assertFalse(self.cs.was_enabled_by_us(1))
+        self.assertFalse(self.cs.was_enabled_by_us(2))
+
+    def test_clear_enabled_removes_marker(self):
+        """clear_enabled removes the marker."""
+        self.cs.mark_enabled(1)
+        self.cs.clear_enabled(1)
+        self.assertFalse(self.cs.was_enabled_by_us(1))
+
+    def test_enabled_markers_independent_per_window(self):
+        """Window 1 and window 2 markers are independent."""
+        self.cs.mark_enabled(1)
+        self.assertFalse(self.cs.was_enabled_by_us(2))
+        self.cs.mark_enabled(2)
+        self.cs.clear_enabled(1)
+        self.assertFalse(self.cs.was_enabled_by_us(1))
+        self.assertTrue(self.cs.was_enabled_by_us(2))
+
+    def test_clear_enabled_nonexistent_is_safe(self):
+        """Clearing a marker that was never set does not raise."""
+        self.cs.clear_enabled(2)  # should not raise
+
+    def test_enabled_marker_survives_skip_save(self):
+        """Saving skip state does not erase enabled markers."""
+        self.cs.mark_enabled(1)
+        self.cs.save_skip("07:00")
+        self.assertTrue(self.cs.was_enabled_by_us(1))
+
+    def test_enabled_marker_survives_windows_save(self):
+        """Saving window config does not erase enabled markers."""
+        self.cs.mark_enabled(2)
+        self.cs.save_windows("06:56", "07:00", True, "16:20", "17:00", True)
+        self.assertTrue(self.cs.was_enabled_by_us(2))
+
     def test_save_windows_records_last_api_config(self):
         """Last sent windows are stored independently from skip state."""
         self.cs.save_windows("06:50", "07:00", True, "16:12", "17:00", True)
