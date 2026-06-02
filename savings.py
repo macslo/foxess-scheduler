@@ -60,7 +60,7 @@ PRICE_SUMMER_WE_NEUTRAL  = float(os.getenv("FOXESS_PRICE_SUMMER_WE_NEUTRAL",  "0
 
 
 class Session(NamedTuple):
-    ts:           str    # ISO datetime of session start
+    ts:           str    # ISO datetime of INSERT (when scheduler ran)
     window:       int    # 1 or 2
     start_time:   str    # "HH:MM"
     end_time:     str    # "HH:MM"
@@ -71,12 +71,19 @@ class Session(NamedTuple):
     saved_pln:    float
     soc_start:    float | None
     strategy:     str
+    session_date: str    # YYYY-MM-DD — date the window was active (not INSERT date)
 
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE)
+    # Migration: add session_date column if upgrading from older schema
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN session_date TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +97,8 @@ def _connect() -> sqlite3.Connection:
             peak_rate    REAL NOT NULL,
             saved_pln    REAL NOT NULL,
             soc_start    REAL,
-            strategy     TEXT NOT NULL DEFAULT ''
+            strategy     TEXT NOT NULL DEFAULT '',
+            session_date TEXT NOT NULL DEFAULT ''
         )
     """)
     conn.commit()
@@ -144,6 +152,7 @@ def record_session(
     winter: bool,
     strategy_name: str,
     weekend: bool = False,
+    session_date: str | None = None,
 ):
     """Record a completed charge session. Called when a window is disabled
     after having been enabled — duration = clock time between start and end.
@@ -159,16 +168,17 @@ def record_session(
     kwh          = round(duration_min / 60 * cfg.BATTERY_CHARGE_RATE_KW, 3)
     charge_rate, peak_rate = _rates(winter, weekend, start_time)
     saved_pln    = round(kwh * (peak_rate - charge_rate), 2)
+    date         = session_date or datetime.date.today().isoformat()
 
     conn = _connect()
     conn.execute(
         """INSERT INTO sessions
            (ts, window, start_time, end_time, duration_min, kwh,
-            charge_rate, peak_rate, saved_pln, soc_start, strategy)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            charge_rate, peak_rate, saved_pln, soc_start, strategy, session_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (datetime.datetime.now().isoformat(), window, start_time, end_time,
          duration_min, kwh, charge_rate, peak_rate, saved_pln, soc_start,
-         strategy_name),
+         strategy_name, date),
     )
     conn.commit()
     conn.close()
@@ -183,17 +193,17 @@ def query_savings(period: str) -> list[Session]:
     now  = datetime.datetime.now()
 
     if period == "all":
-        rows = conn.execute("SELECT * FROM sessions ORDER BY ts").fetchall()
+        rows = conn.execute("SELECT * FROM sessions ORDER BY session_date, start_time").fetchall()
     elif period.endswith("d") and period[:-1].isdigit():
         days  = int(period[:-1])
         since = (now - datetime.timedelta(days=days)).isoformat()
         rows  = conn.execute(
-            "SELECT * FROM sessions WHERE ts >= ? ORDER BY ts", (since,)
+            "SELECT * FROM sessions WHERE ts >= ? ORDER BY session_date, start_time", (since,)
         ).fetchall()
     elif len(period) == 7 and period[4] == "-":
         # YYYY-MM
         rows = conn.execute(
-            "SELECT * FROM sessions WHERE ts LIKE ? ORDER BY ts",
+            "SELECT * FROM sessions WHERE ts LIKE ? ORDER BY session_date, start_time",
             (f"{period}%",)
         ).fetchall()
     else:
@@ -237,7 +247,7 @@ def print_report(period: str):
     print(f"{'─' * 52}")
 
     for s in summary["sessions_detail"]:
-        date = s.ts[:10]
+        date = s.session_date or s.ts[:10]
         soc  = f"  SOC={s.soc_start:.0f}%" if s.soc_start is not None else ""
         print(f"  {date}  w{s.window}  {s.start_time}–{s.end_time}"
               f"  {s.duration_min}min  {s.kwh:.2f}kWh"
@@ -256,7 +266,7 @@ def discord_report(period: str) -> dict | None:
     # Build per-session lines (last 10 to avoid hitting Discord limits)
     lines = []
     for s in sessions[-10:]:
-        date = s.ts[:10]
+        date = s.session_date or s.ts[:10]
         lines.append(f"`{date}` w{s.window} {s.start_time}–{s.end_time} "
                      f"{s.duration_min}min · **{s.saved_pln:.2f} zł**")
     if len(sessions) > 10:

@@ -273,9 +273,12 @@ def _record_session_on_enable(plan: "ChargePlan", prev_enabled1: bool, prev_enab
 
         if not we_enabled and window.enabled:
             # First time we enable this window — record and mark
+            # Pass today's date explicitly so session_date is always the
+            # day the window was active, not the day it was inserted.
             savings.record_session(
                 idx, window.start, window.end, soc,
                 winter, strategy_name, weekend,
+                session_date=datetime.date.today().isoformat(),
             )
             charge_state.mark_enabled(idx)
 
