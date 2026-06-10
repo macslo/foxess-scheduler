@@ -22,11 +22,13 @@ from strategies import (
     ManualStrategy,
 )
 from scheduler_models import ChargeContext
+from scheduler_models import ChargePlan, ChargeWindow
 from weather import is_low_solar, SOLAR_GOOD, SOLAR_POOR
 import windows
 import config as cfg
 from unittest.mock import patch
 import strategies as _strategies_module
+import foxess_grid_charge_scheduler as _scheduler_module
 from proximity import saved_window_relevant, window_in_progress, proximity_check
 
 
@@ -787,6 +789,36 @@ class TestChargeStateSundayScenario(unittest.TestCase):
         for _ in range(5):
             self.assertTrue(self.cs.is_active(dt(20, 30)))
         self.assertTrue(self.cs.STATE_FILE.exists())
+
+
+class TestSchedulerChargeStateUpdate(unittest.TestCase):
+    """Regression coverage for skip_until updates from the scheduler plan."""
+
+    def setUp(self):
+        import charge_state as cs
+        self.cs = cs
+        cs.clear()
+
+    def tearDown(self):
+        self.cs.clear()
+
+    def _plan(self, w2_enabled=True):
+        return ChargePlan(
+            window1=ChargeWindow("06:45", "07:00", True),
+            window2=ChargeWindow("15:30", "17:00", w2_enabled),
+            morning_target=25,
+            evening_target=100,
+        )
+
+    def test_future_enabled_100_percent_window_does_not_skip_all_day(self):
+        """An enabled afternoon API window must not block morning checks."""
+        _scheduler_module._update_charge_state(dt(6, 42), self._plan())
+        self.assertFalse(self.cs.should_skip(dt(6, 44)))
+
+    def test_near_enabled_100_percent_window_sets_skip(self):
+        """Once the 100% window is near, skip_until can suppress API churn."""
+        _scheduler_module._update_charge_state(dt(15, 28), self._plan())
+        self.assertTrue(self.cs.should_skip(dt(15, 29)))
 
 
 # ── Window in progress ────────────────────────────────────────────────────────

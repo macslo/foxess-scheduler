@@ -218,7 +218,7 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
             _send_plan(sn, plan)
             changed = True
 
-        _update_charge_state(plan)
+        _update_charge_state(now, plan)
         _record_session_on_enable(plan, already1, already2, ctx.soc, ctx.winter,
                                   weekend, strategy.name)
 
@@ -230,7 +230,15 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
     _notify_run(sn, ctx, strategy, plan, radiation, changed)
 
 
-def _update_charge_state(plan: ChargePlan):
+def _window_can_skip(now: datetime.datetime, window: ChargeWindow) -> bool:
+    """Return True once an enabled 100% window is about to start or active."""
+    if not window.enabled:
+        return False
+    mins = windows.minutes_until(now, window.start)
+    return 0 <= mins <= cfg.WINDOW_LEAD_MINUTES or window_in_progress(now, window.start, window.end)
+
+
+def _update_charge_state(now: datetime.datetime, plan: ChargePlan):
     """Persist sent windows, and separately mark target=100% skip windows.
 
     A window qualifies for skip if it is enabled AND its target is 100%
@@ -243,9 +251,9 @@ def _update_charge_state(plan: ChargePlan):
     charge_state.save_windows(w1.start, w1.end, w1.enabled, w2.start, w2.end, w2.enabled)
 
     skip_end = None
-    if w1.enabled and plan.morning_target == 100:
+    if plan.morning_target == 100 and _window_can_skip(now, w1):
         skip_end = w1.end
-    if w2.enabled and plan.evening_target == 100:
+    if plan.evening_target == 100 and _window_can_skip(now, w2):
         skip_end = max(skip_end, w2.end) if skip_end else w2.end
 
     if skip_end:
