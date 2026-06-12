@@ -230,9 +230,18 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
     _notify_run(sn, ctx, strategy, plan, radiation, changed)
 
 
-def _window_can_skip(now: datetime.datetime, window: ChargeWindow) -> bool:
-    """Return True once an enabled 100% window is about to start or active."""
+def _should_save_skip_until(now: datetime.datetime, window: ChargeWindow) -> bool:
+    """Return True only when this window may suppress further API calls.
+
+    skip_until is safe only for an enabled 100% target window that is about to
+    start or already running. Future or closed windows can inherit enabled=True
+    from the API, but they must not block scheduler runs for hours.
+    """
     if not window.enabled:
+        return False
+    if windows.is_closed(now, window.end):
+        return False
+    if windows.is_not_opened_yet(now, window.start):
         return False
     mins = windows.minutes_until(now, window.start)
     return 0 <= mins <= cfg.WINDOW_LEAD_MINUTES or window_in_progress(now, window.start, window.end)
@@ -251,9 +260,9 @@ def _update_charge_state(now: datetime.datetime, plan: ChargePlan):
     charge_state.save_windows(w1.start, w1.end, w1.enabled, w2.start, w2.end, w2.enabled)
 
     skip_end = None
-    if plan.morning_target == 100 and _window_can_skip(now, w1):
+    if plan.morning_target == 100 and _should_save_skip_until(now, w1):
         skip_end = w1.end
-    if plan.evening_target == 100 and _window_can_skip(now, w2):
+    if plan.evening_target == 100 and _should_save_skip_until(now, w2):
         skip_end = max(skip_end, w2.end) if skip_end else w2.end
 
     if skip_end:
@@ -314,7 +323,6 @@ def main():
 
     if _should_skip_early(now, force):
         sys.exit(0)
-
 
     today    = now.date()
     strategy = strategies.get_strategy(today, cfg.TARIFF)
