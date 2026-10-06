@@ -1201,7 +1201,7 @@ class TestSavingsRecord(unittest.TestCase):
             morning_target=100,
             evening_target=85,
         )
-        now = datetime.datetime(2026, 9, 27, 19, 56)
+        now = datetime.datetime(2026, 9, 27, 19, 57)
         _scheduler_module._record_sessions_for_enabled_windows(
             now, plan, 90.0, winter=False, weekend=True,
             strategy_name="G13s DYNAMIC SUMMER weekend",
@@ -1211,6 +1211,33 @@ class TestSavingsRecord(unittest.TestCase):
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0].window, 1)
         self.assertEqual(sessions[0].start_time, "20:00")
+
+    def test_future_window_is_recorded_at_its_own_lead_time(self):
+        """A later window is not counted during the morning window run."""
+        plan = ChargePlan(
+            window1=ChargeWindow("06:43", "07:00", True),
+            window2=ChargeWindow("15:18", "17:00", True),
+            morning_target=25,
+            evening_target=100,
+        )
+        morning = datetime.datetime(2026, 9, 24, 6, 42)
+        _scheduler_module._record_sessions_for_enabled_windows(
+            morning, plan, 10.0, winter=False, weekend=False,
+            strategy_name="G13s DYNAMIC SUMMER weekday",
+        )
+
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].window, 1)
+
+        afternoon = datetime.datetime(2026, 9, 24, 15, 15)
+        _scheduler_module._record_sessions_for_enabled_windows(
+            afternoon, plan, 40.0, winter=False, weekend=False,
+            strategy_name="G13s DYNAMIC SUMMER weekday",
+        )
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual({session.window for session in sessions}, {1, 2})
 
     def test_sunday_session_uses_neutral_charge_rate_summer(self):
         self._record(

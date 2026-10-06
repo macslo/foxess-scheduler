@@ -282,12 +282,20 @@ def _record_sessions_for_enabled_windows(now: datetime.datetime, plan: "ChargePl
 
     The savings DB deduplicates by (date, window), so repeated cron runs are
     safe while a recurring FoxESS window can still be counted on later days
-    even when its API settings have not changed. Closed windows are excluded:
-    FoxESS may leave their enable flag set after their scheduled time passes.
+    even when its API settings have not changed. Record only near or during
+    the window; FoxESS may leave closed windows enabled, and a future window's
+    SOC decision can change before it starts.
     """
     w1, w2 = plan.window1, plan.window2
     for idx, window in [(1, w1), (2, w2)]:
-        if window.enabled and not windows.is_closed(now, window.end):
+        if not window.enabled or windows.is_closed(now, window.end):
+            continue
+        mins_until_start = windows.minutes_until(now, window.start)
+        near_or_active = (
+            0 <= mins_until_start <= cfg.WINDOW_LEAD_MINUTES
+            or window_in_progress(now, window.start, window.end)
+        )
+        if near_or_active:
             savings.record_session(
                 idx, window.start, window.end, soc,
                 winter, strategy_name, weekend,
