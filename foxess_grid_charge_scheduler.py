@@ -223,8 +223,8 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
             changed = True
 
         _update_charge_state(now, plan)
-        _record_session_on_enable(plan, already1, already2, ctx.soc, ctx.winter,
-                                  weekend, strategy.name)
+        _record_sessions_for_enabled_windows(now, plan, ctx.soc, ctx.winter,
+                                             weekend, strategy.name)
 
     except Exception as e:
         notifier.notify_error("Failed to read/set charge windows", e)
@@ -275,37 +275,24 @@ def _update_charge_state(now: datetime.datetime, plan: ChargePlan):
         charge_state.clear_skip()
 
 
-def _record_session_on_enable(plan: "ChargePlan", prev_enabled1: bool, prev_enabled2: bool,
-                              soc: float | None, winter: bool, weekend: bool,
-                              strategy_name: str) -> None:
-    """Record a savings session when we first enable a window.
+def _record_sessions_for_enabled_windows(now: datetime.datetime, plan: "ChargePlan",
+                                         soc: float | None, winter: bool,
+                                         weekend: bool, strategy_name: str) -> None:
+    """Record each enabled window once per schedule date.
 
-    Uses charge_state.mark_enabled/was_enabled_by_us to detect the first
-    enable reliably — even if the window stays enabled across multiple cron
-    runs or overnight into the next day.
-
-    enable  (API=False → plan=True, first time): record + mark
-    already enabled by us + still on:            skip (already recorded)
-    disable (was enabled by us → plan=False):    clear marker
+    The savings DB deduplicates by (date, window), so repeated cron runs are
+    safe while a recurring FoxESS window can still be counted on later days
+    even when its API settings have not changed. Closed windows are excluded:
+    FoxESS may leave their enable flag set after their scheduled time passes.
     """
     w1, w2 = plan.window1, plan.window2
-    for idx, window, prev_enabled in [(1, w1, prev_enabled1), (2, w2, prev_enabled2)]:
-        we_enabled = charge_state.was_enabled_by_us(idx)
-
-        if not we_enabled and window.enabled:
-            # First time we enable this window — record and mark
-            # Pass today's date explicitly so session_date is always the
-            # day the window was active, not the day it was inserted.
+    for idx, window in [(1, w1), (2, w2)]:
+        if window.enabled and not windows.is_closed(now, window.end):
             savings.record_session(
                 idx, window.start, window.end, soc,
                 winter, strategy_name, weekend,
-                session_date=datetime.date.today().isoformat(),
+                session_date=now.date().isoformat(),
             )
-            charge_state.mark_enabled(idx)
-
-        elif we_enabled and not window.enabled:
-            # We disabled it (or it was frozen) — clear marker
-            charge_state.clear_enabled(idx)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────

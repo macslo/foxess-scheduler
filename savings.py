@@ -107,7 +107,8 @@ def _connect() -> sqlite3.Connection:
 
 # ── Rate lookup ───────────────────────────────────────────────────────────────
 
-def _rates(winter: bool, weekend: bool, start_time: str) -> tuple[float, float]:
+def _rates(winter: bool, weekend: bool, start_time: str,
+           sunday: bool = False) -> tuple[float, float]:
     """Return (charge_rate, peak_rate) for the given window slot.
 
     charge_rate: what we pay during the cheap charging window
@@ -115,11 +116,31 @@ def _rates(winter: bool, weekend: bool, start_time: str) -> tuple[float, float]:
 
     Window 1 (≈06:30-07:00): charges just before morning peak → avoids peak
     Window 2 (≈13:00-17:00): charges during cheap midday → avoids evening peak
-    Sunday evening (20:00-21:00): charges at night rate → avoids Monday peak
+    Sunday evening (20:00-21:00): weekend neutral rate → avoids Monday peak
     """
     h = int(start_time.split(":")[0])
 
-    # Sunday evening window — charges during night rate, avoids Monday morning peak
+    # The Sunday pre-Monday top-up runs 20:00-21:00, still in weekend
+    # neutral hours. It avoids the next weekday's peak, but is not charged
+    # at the night rate until 21:00.
+    if sunday and h == 20:
+        if winter:
+            return PRICE_WINTER_WE_NEUTRAL, PRICE_WINTER_WD_PEAK
+        return PRICE_SUMMER_WE_NEUTRAL, PRICE_SUMMER_WD_PEAK
+
+    # Morning windows before 07:00 charge during the night-rate period.
+    # Weekdays avoid the coming peak; weekends have no true peak to avoid.
+    if h < 7:
+        if winter:
+            night_rate = PRICE_WINTER_WE_NIGHT if weekend else PRICE_WINTER_WD_NIGHT
+            avoided_rate = PRICE_WINTER_WE_NEUTRAL if weekend else PRICE_WINTER_WD_PEAK
+        else:
+            night_rate = PRICE_SUMMER_WE_NIGHT if weekend else PRICE_SUMMER_WD_NIGHT
+            avoided_rate = PRICE_SUMMER_WE_NEUTRAL if weekend else PRICE_SUMMER_WD_PEAK
+        return night_rate, avoided_rate
+
+    # Preserve the previous estimate for other evening windows. The default
+    # Sunday 20:00-21:00 window is classified by the branch above.
     if h >= 19:
         if winter:
             return PRICE_WINTER_WD_NIGHT, PRICE_WINTER_WD_PEAK
@@ -154,10 +175,11 @@ def record_session(
     weekend: bool = False,
     session_date: str | None = None,
 ):
-    """Record a completed charge session. Called when a window is disabled
-    after having been enabled — duration = clock time between start and end.
+    """Record one estimated charge session per window and schedule date.
 
-    If end_time <= start_time (shouldn't happen in practice), session is skipped.
+    Energy is estimated from the full configured window duration and the
+    configured battery charge rate. Repeated calls for the same date/window
+    are ignored. If end_time <= start_time, the session is skipped.
     """
     h_s, m_s = map(int, start_time.split(":"))
     h_e, m_e = map(int, end_time.split(":"))
@@ -166,22 +188,36 @@ def record_session(
         return
 
     kwh          = round(duration_min / 60 * cfg.BATTERY_CHARGE_RATE_KW, 3)
-    charge_rate, peak_rate = _rates(winter, weekend, start_time)
-    saved_pln    = round(kwh * (peak_rate - charge_rate), 2)
     date         = session_date or datetime.date.today().isoformat()
+    sunday       = datetime.date.fromisoformat(date).weekday() == 6
 
     conn = _connect()
-    conn.execute(
-        """INSERT INTO sessions
-           (ts, window, start_time, end_time, duration_min, kwh,
-            charge_rate, peak_rate, saved_pln, soc_start, strategy, session_date)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (datetime.datetime.now().isoformat(), window, start_time, end_time,
-         duration_min, kwh, charge_rate, peak_rate, saved_pln, soc_start,
-         strategy_name, date),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        # Serialize the existence check and insert so overlapping cron runs
+        # cannot create duplicate rows for the same daily recurring window.
+        conn.execute("BEGIN IMMEDIATE")
+        exists = conn.execute(
+            "SELECT 1 FROM sessions WHERE session_date = ? AND window = ? LIMIT 1",
+            (date, window),
+        ).fetchone()
+        if exists:
+            conn.commit()
+            return
+
+        charge_rate, peak_rate = _rates(winter, weekend, start_time, sunday=sunday)
+        saved_pln = round(kwh * (peak_rate - charge_rate), 2)
+        conn.execute(
+            """INSERT INTO sessions
+               (ts, window, start_time, end_time, duration_min, kwh,
+                charge_rate, peak_rate, saved_pln, soc_start, strategy, session_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (datetime.datetime.now().isoformat(), window, start_time, end_time,
+             duration_min, kwh, charge_rate, peak_rate, saved_pln, soc_start,
+             strategy_name, date),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def query_savings(period: str) -> list[Session]:

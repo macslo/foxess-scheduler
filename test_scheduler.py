@@ -1078,13 +1078,13 @@ import savings as _savings_module
 class TestSavingsRates(unittest.TestCase):
     """Tests for _rates() — correct price pair per season/day/slot."""
 
-    def _r(self, winter, weekend, start):
-        return _savings_module._rates(winter, weekend, start)
+    def _r(self, winter, weekend, start, sunday=False):
+        return _savings_module._rates(winter, weekend, start, sunday=sunday)
 
     def test_summer_weekday_window1(self):
-        """Window 1 morning: charges at summer cheap, avoids summer peak."""
+        """Window 1 before 07:00 charges at night rate, avoids summer peak."""
         charge, peak = self._r(winter=False, weekend=False, start="06:50")
-        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_CHEAP)
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_NIGHT)
         self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
 
     def test_summer_weekday_window2(self):
@@ -1094,9 +1094,9 @@ class TestSavingsRates(unittest.TestCase):
         self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
 
     def test_winter_weekday_window1(self):
-        """Winter weekday morning: charges at midday rate, avoids winter peak."""
+        """Winter weekday morning: charges at night rate, avoids winter peak."""
         charge, peak = self._r(winter=True, weekend=False, start="06:30")
-        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_MIDDAY)
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_NIGHT)
         self.assertEqual(peak,   _savings_module.PRICE_WINTER_WD_PEAK)
 
     def test_winter_weekday_window2(self):
@@ -1118,15 +1118,15 @@ class TestSavingsRates(unittest.TestCase):
         self.assertEqual(peak,   _savings_module.PRICE_WINTER_WE_NEUTRAL)
 
     def test_sunday_evening_summer(self):
-        """Sunday evening (20:00) summer: night rate, avoids Monday peak."""
-        charge, peak = self._r(winter=False, weekend=True, start="20:00")
-        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WD_NIGHT)
+        """Sunday 20:00-21:00 uses weekend neutral price before night rate."""
+        charge, peak = self._r(winter=False, weekend=True, start="20:00", sunday=True)
+        self.assertEqual(charge, _savings_module.PRICE_SUMMER_WE_NEUTRAL)
         self.assertEqual(peak,   _savings_module.PRICE_SUMMER_WD_PEAK)
 
     def test_sunday_evening_winter(self):
-        """Sunday evening (20:00) winter: night rate, avoids Monday peak."""
-        charge, peak = self._r(winter=True, weekend=True, start="20:00")
-        self.assertEqual(charge, _savings_module.PRICE_WINTER_WD_NIGHT)
+        """Sunday 20:00-21:00 uses weekend neutral price before night rate."""
+        charge, peak = self._r(winter=True, weekend=True, start="20:00", sunday=True)
+        self.assertEqual(charge, _savings_module.PRICE_WINTER_WE_NEUTRAL)
         self.assertEqual(peak,   _savings_module.PRICE_WINTER_WD_PEAK)
 
     def test_charge_always_less_than_peak(self):
@@ -1161,11 +1161,84 @@ class TestSavingsRecord(unittest.TestCase):
         pathlib.Path(self._tmp.name).unlink(missing_ok=True)
 
     def _record(self, start="06:56", end="07:00", soc=10.0,
-                winter=False, weekend=False, window=1):
+                winter=False, weekend=False, window=1, session_date=None):
         _savings_module.record_session(
             window, start, end, soc, winter,
-            "G13s DYNAMIC SUMMER weekday", weekend
+            "G13s DYNAMIC SUMMER weekday", weekend,
+            session_date=session_date,
         )
+
+    def test_unchanged_window_is_recorded_again_on_next_date(self):
+        """Repeated runs dedupe per day, but unchanged recurring windows count daily."""
+        plan = ChargePlan(
+            window1=ChargeWindow("06:50", "07:00", False),
+            window2=ChargeWindow("15:30", "17:00", True),
+            morning_target=25,
+            evening_target=85,
+        )
+        sunday = datetime.datetime(2026, 7, 5, 15, 28)
+        monday = datetime.datetime(2026, 7, 6, 15, 28)
+
+        for now in (sunday, sunday, monday):
+            _scheduler_module._record_sessions_for_enabled_windows(
+                now, plan, 40.0, winter=False,
+                weekend=now.weekday() >= 5,
+                strategy_name="G13s weekday/weekend",
+            )
+
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual(
+            {session.session_date for session in sessions},
+            {"2026-07-05", "2026-07-06"},
+        )
+
+    def test_closed_enabled_window_is_not_recorded(self):
+        """FoxESS can leave an expired window enabled after its end time."""
+        plan = ChargePlan(
+            window1=ChargeWindow("20:00", "21:00", True),
+            window2=ChargeWindow("15:15", "17:00", True),
+            morning_target=100,
+            evening_target=85,
+        )
+        now = datetime.datetime(2026, 9, 27, 19, 56)
+        _scheduler_module._record_sessions_for_enabled_windows(
+            now, plan, 90.0, winter=False, weekend=True,
+            strategy_name="G13s DYNAMIC SUMMER weekend",
+        )
+
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].window, 1)
+        self.assertEqual(sessions[0].start_time, "20:00")
+
+    def test_sunday_session_uses_neutral_charge_rate_summer(self):
+        self._record(
+            start="20:00", end="21:00", winter=False, weekend=True,
+            window=1, session_date="2026-07-05",
+        )
+        session = _savings_module.query_savings("all")[0]
+        self.assertEqual(session.charge_rate, _savings_module.PRICE_SUMMER_WE_NEUTRAL)
+        self.assertEqual(session.peak_rate, _savings_module.PRICE_SUMMER_WD_PEAK)
+
+    def test_sunday_session_uses_neutral_charge_rate_winter(self):
+        self._record(
+            start="20:00", end="21:00", winter=True, weekend=True,
+            window=1, session_date="2026-01-04",
+        )
+        session = _savings_module.query_savings("all")[0]
+        self.assertEqual(session.charge_rate, _savings_module.PRICE_WINTER_WE_NEUTRAL)
+        self.assertEqual(session.peak_rate, _savings_module.PRICE_WINTER_WD_PEAK)
+
+    def test_winter_morning_report_uses_night_rate(self):
+        self._record(
+            start="06:22", end="07:00", winter=True, weekend=False,
+            window=1, session_date="2026-10-05",
+        )
+        session = _savings_module.query_savings("all")[0]
+        self.assertEqual(session.charge_rate, _savings_module.PRICE_WINTER_WD_NIGHT)
+        self.assertEqual(session.peak_rate, _savings_module.PRICE_WINTER_WD_PEAK)
+        self.assertEqual(session.saved_pln, 1.92)
 
     def test_record_and_retrieve(self):
         """Recorded session appears in query_savings('all')."""
