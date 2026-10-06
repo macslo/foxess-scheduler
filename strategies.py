@@ -27,6 +27,7 @@ class ChargeStrategy(ABC):
     """Base class for all charging strategies."""
 
     name: str
+    uses_soc_targets = True
 
     # Window 1: morning top-up. Use get_window1(ctx).
     window1:           tuple[str, str]   # clear day
@@ -312,6 +313,8 @@ class DynamicWinterWeekend(WinterWeekend):
 
 class ManualStrategy(ChargeStrategy):
     """User-defined windows from config. No SOC targets — windows follow policy only."""
+
+    uses_soc_targets = False
 
     def __init__(self, is_weekday: bool):
         self.name              = f"Manual ({'weekday' if is_weekday else 'weekend'})"

@@ -93,8 +93,12 @@ def _evaluate_windows(now: datetime.datetime, strategy, ctx: ChargeContext,
     morning_target = strategy.morning_target(ctx)
     evening_target = strategy.evening_target(ctx)
 
-    enable1 = strategy.enable1() and (ctx.soc < morning_target)
-    enable2 = strategy.enable2() and (ctx.soc < evening_target)
+    if strategy.uses_soc_targets:
+        enable1 = strategy.enable1() and (ctx.soc < morning_target)
+        enable2 = strategy.enable2() and (ctx.soc < evening_target)
+    else:
+        enable1 = strategy.enable1()
+        enable2 = strategy.enable2()
 
     if not force:
         if windows.is_closed(now, end1) or windows.is_not_opened_yet(now, start1):

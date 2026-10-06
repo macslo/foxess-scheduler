@@ -30,6 +30,7 @@ from unittest.mock import patch
 import strategies as _strategies_module
 import foxess_grid_charge_scheduler as _scheduler_module
 from proximity import saved_window_relevant, window_in_progress, proximity_check
+from foxess_grid_charge_scheduler import _evaluate_windows
 
 
 class patch_hour:
@@ -528,6 +529,26 @@ class TestManualStrategyPolicy(unittest.TestCase):
 
     def test_unknown_defaults_false(self):
         self.assertFalse(ManualStrategy._resolve("bogus", True))
+
+    def test_manual_policy_ignores_soc_at_100_percent(self):
+        with patch.object(cfg, "CHARGE1_ENABLE", "always"), \
+             patch.object(cfg, "CHARGE2_ENABLE", "never"):
+            strategy = ManualStrategy(is_weekday=True)
+            plan = _evaluate_windows(
+                dt(12), strategy, ctx(soc=100.0), force=True
+            )
+
+        self.assertTrue(plan.window1.enabled)
+        self.assertFalse(plan.window2.enabled)
+
+    def test_g13s_still_respects_soc_target(self):
+        strategy = SummerWeekday()
+        plan = _evaluate_windows(
+            dt(12), strategy, ctx(soc=100.0), force=True
+        )
+
+        self.assertFalse(plan.window1.enabled)
+        self.assertFalse(plan.window2.enabled)
 
 
 # ── Weather / low_solar ───────────────────────────────────────────────────────
