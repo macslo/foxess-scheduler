@@ -378,6 +378,12 @@ def savings_summary(period: str) -> dict:
 
 # ── CLI report ────────────────────────────────────────────────────────────────
 
+def _actual_range(s: Session) -> str:
+    if not (s.actual_start_ts and s.actual_end_ts):
+        return ""
+    return f"{s.actual_start_ts[11:16]}–{s.actual_end_ts[11:16]}"
+
+
 def print_report(period: str):
     """Print savings report to stdout."""
     summary = savings_summary(period)
@@ -397,11 +403,8 @@ def print_report(period: str):
         date = s.session_date or s.ts[:10]
         soc  = f"  SOC={s.soc_start:.0f}%" if s.soc_start is not None else ""
         status = f"  {s.status}"
-        actual = ""
-        if s.actual_start_ts and s.actual_end_ts:
-            actual = (
-                f"  actual {s.actual_start_ts[11:16]}–{s.actual_end_ts[11:16]}"
-            )
+        actual_range = _actual_range(s)
+        actual = f"  actual {actual_range}" if actual_range else ""
         print(f"  {date}  w{s.window}  {s.start_time}–{s.end_time}"
               f"  {s.duration_min}min  {s.kwh:.2f}kWh"
               f"  {s.saved_pln:.2f}zł{soc}{status}{actual}")
@@ -420,8 +423,11 @@ def discord_report(period: str) -> dict | None:
     lines = []
     for s in sessions[-10:]:
         date = s.session_date or s.ts[:10]
-        lines.append(f"`{date}` w{s.window} {s.start_time}–{s.end_time} "
-                     f"{s.duration_min}min · **{s.saved_pln:.2f} zł**")
+        actual_range = _actual_range(s)
+        actual = f" actual {actual_range}" if actual_range else ""
+        lines.append(f"`{date}` w{s.window} plan {s.start_time}–{s.end_time}"
+                     f"{actual} · {s.status} · {s.duration_min}min"
+                     f" · **{s.saved_pln:.2f} zł**")
     if len(sessions) > 10:
         lines.insert(0, f"_(showing last 10 of {len(sessions)} sessions)_")
 
