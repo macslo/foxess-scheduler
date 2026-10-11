@@ -1309,6 +1309,49 @@ class TestSavingsRecord(unittest.TestCase):
         s = _savings_module.query_savings("all")[0]
         self.assertAlmostEqual(s.kwh, 5.63, places=2)
 
+    def test_finalize_session_uses_observed_runtime(self):
+        """Finalized sessions report observed time instead of full plan."""
+        _savings_module.record_session(
+            2, "14:20", "15:00", 50.0, True, "test", False,
+            session_date="2026-10-07",
+            observed_at=datetime.datetime(2026, 10, 7, 14, 20),
+        )
+        _savings_module.finalize_session(
+            2, "2026-10-07", datetime.datetime(2026, 10, 7, 14, 50)
+        )
+        s = _savings_module.query_savings("all")[0]
+        self.assertEqual(s.status, "closed")
+        self.assertEqual(s.duration_min, 30)
+        self.assertAlmostEqual(s.kwh, 2.815, places=3)
+        self.assertEqual(s.actual_end_ts, "2026-10-07T14:50:00")
+
+    def test_finalize_session_is_idempotent(self):
+        """A closed session is not recalculated by later runs."""
+        _savings_module.record_session(
+            2, "14:20", "15:00", 50.0, True, "test", False,
+            session_date="2026-10-07",
+            observed_at=datetime.datetime(2026, 10, 7, 14, 20),
+        )
+        _savings_module.finalize_session(
+            2, "2026-10-07", datetime.datetime(2026, 10, 7, 14, 50)
+        )
+        _savings_module.finalize_session(
+            2, "2026-10-07", datetime.datetime(2026, 10, 7, 15, 0)
+        )
+        s = _savings_module.query_savings("all")[0]
+        self.assertEqual(s.duration_min, 30)
+
+    def test_query_finalizes_expired_open_session(self):
+        """Reports close open sessions whose planned end already passed."""
+        _savings_module.record_session(
+            1, "06:00", "07:00", 10.0, True, "test", False,
+            session_date="2026-10-07",
+            observed_at=datetime.datetime(2026, 10, 7, 6, 0),
+        )
+        sessions = _savings_module.query_savings("all")
+        self.assertEqual(sessions[0].status, "closed")
+        self.assertEqual(sessions[0].duration_min, 60)
+
     def test_multiple_sessions_all(self):
         """Multiple sessions all returned by 'all'."""
         self._record(start="06:56", end="07:00", window=1)

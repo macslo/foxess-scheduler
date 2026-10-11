@@ -72,18 +72,15 @@ class Session(NamedTuple):
     soc_start:    float | None
     strategy:     str
     session_date: str    # YYYY-MM-DD — date the window was active (not INSERT date)
+    status:       str    # estimated/open/closed
+    actual_start_ts: str # ISO datetime when scheduler first saw the window active
+    actual_end_ts:   str # ISO datetime when scheduler saw/derived the window end
 
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE)
-    # Migration: add session_date column if upgrading from older schema
-    try:
-        conn.execute("ALTER TABLE sessions ADD COLUMN session_date TEXT NOT NULL DEFAULT ''")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,11 +95,39 @@ def _connect() -> sqlite3.Connection:
             saved_pln    REAL NOT NULL,
             soc_start    REAL,
             strategy     TEXT NOT NULL DEFAULT '',
-            session_date TEXT NOT NULL DEFAULT ''
+            session_date TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL DEFAULT 'estimated',
+            actual_start_ts TEXT NOT NULL DEFAULT '',
+            actual_end_ts   TEXT NOT NULL DEFAULT ''
         )
     """)
+    # Migrations for databases created by earlier versions.
+    for column, ddl in (
+        ("session_date", "TEXT NOT NULL DEFAULT ''"),
+        ("status", "TEXT NOT NULL DEFAULT 'estimated'"),
+        ("actual_start_ts", "TEXT NOT NULL DEFAULT ''"),
+        ("actual_end_ts", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {ddl}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
+
+
+_SESSION_SELECT = """
+    SELECT ts, window, start_time, end_time, duration_min, kwh,
+           charge_rate, peak_rate, saved_pln, soc_start, strategy,
+           session_date, status, actual_start_ts, actual_end_ts
+    FROM sessions
+"""
+
+
+def _datetime_for_time(date: str, hhmm: str) -> datetime.datetime:
+    h, m = map(int, hhmm.split(":"))
+    return datetime.datetime.combine(datetime.date.fromisoformat(date), datetime.time(h, m))
 
 
 # ── Rate lookup ───────────────────────────────────────────────────────────────
@@ -174,12 +199,13 @@ def record_session(
     strategy_name: str,
     weekend: bool = False,
     session_date: str | None = None,
+    observed_at: datetime.datetime | None = None,
 ):
-    """Record one estimated charge session per window and schedule date.
+    """Record one observed charge session per window and schedule date.
 
-    Energy is estimated from the full configured window duration and the
-    configured battery charge rate. Repeated calls for the same date/window
-    are ignored. If end_time <= start_time, the session is skipped.
+    Until the session is finalized, energy is estimated from the full configured
+    window duration. Repeated calls for the same date/window are ignored. If
+    end_time <= start_time, the session is skipped.
     """
     h_s, m_s = map(int, start_time.split(":"))
     h_e, m_e = map(int, end_time.split(":"))
@@ -188,7 +214,9 @@ def record_session(
         return
 
     kwh          = round(duration_min / 60 * cfg.BATTERY_CHARGE_RATE_KW, 3)
-    date         = session_date or datetime.date.today().isoformat()
+    observed     = observed_at or datetime.datetime.now()
+    date         = session_date or observed.date().isoformat()
+    actual_start = max(observed, _datetime_for_time(date, start_time))
     sunday       = datetime.date.fromisoformat(date).weekday() == 6
 
     conn = _connect()
@@ -201,6 +229,15 @@ def record_session(
             (date, window),
         ).fetchone()
         if exists:
+            conn.execute(
+                """UPDATE sessions
+                   SET actual_start_ts = CASE
+                         WHEN actual_start_ts = '' THEN ?
+                         ELSE actual_start_ts
+                       END
+                   WHERE session_date = ? AND window = ?""",
+                (actual_start.isoformat(), date, window),
+            )
             conn.commit()
             return
 
@@ -209,15 +246,88 @@ def record_session(
         conn.execute(
             """INSERT INTO sessions
                (ts, window, start_time, end_time, duration_min, kwh,
-                charge_rate, peak_rate, saved_pln, soc_start, strategy, session_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (datetime.datetime.now().isoformat(), window, start_time, end_time,
+                charge_rate, peak_rate, saved_pln, soc_start, strategy, session_date,
+                status, actual_start_ts, actual_end_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (observed.isoformat(), window, start_time, end_time,
              duration_min, kwh, charge_rate, peak_rate, saved_pln, soc_start,
-             strategy_name, date),
+             strategy_name, date, "open", actual_start.isoformat(), ""),
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def finalize_session(
+    window: int,
+    session_date: str,
+    ended_at: datetime.datetime,
+):
+    """Finalize an open session using observed runtime instead of planned time."""
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT id, start_time, end_time, charge_rate, peak_rate,
+                      actual_start_ts, status
+               FROM sessions
+               WHERE session_date = ? AND window = ?
+               LIMIT 1""",
+            (session_date, window),
+        ).fetchone()
+        if not row:
+            conn.commit()
+            return
+
+        row_id, start_time, end_time, charge_rate, peak_rate, actual_start_ts, status = row
+        if status == "closed":
+            conn.commit()
+            return
+
+        if actual_start_ts:
+            start_dt = datetime.datetime.fromisoformat(actual_start_ts)
+        else:
+            start_dt = _datetime_for_time(session_date, start_time)
+
+        planned_end = _datetime_for_time(session_date, end_time)
+        end_dt = min(ended_at, planned_end)
+        duration_min = max(0, int((end_dt - start_dt).total_seconds() / 60))
+        kwh = round(duration_min / 60 * cfg.BATTERY_CHARGE_RATE_KW, 3)
+        saved_pln = round(kwh * (peak_rate - charge_rate), 2)
+
+        conn.execute(
+            """UPDATE sessions
+               SET duration_min = ?, kwh = ?, saved_pln = ?,
+                   status = 'closed', actual_end_ts = ?
+               WHERE id = ?""",
+            (duration_min, kwh, saved_pln, end_dt.isoformat(), row_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finalize_expired_sessions(now: datetime.datetime | None = None):
+    """Close open sessions whose planned end time has already passed."""
+    current = now or datetime.datetime.now()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT session_date, window, start_time, end_time, actual_start_ts
+               FROM sessions
+               WHERE status = 'open'"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for session_date, window, start_time, end_time, actual_start_ts in rows:
+        planned_end = _datetime_for_time(session_date, end_time)
+        actual_start = (
+            datetime.datetime.fromisoformat(actual_start_ts)
+            if actual_start_ts else _datetime_for_time(session_date, start_time)
+        )
+        if current >= planned_end and actual_start <= planned_end:
+            finalize_session(window, session_date, planned_end)
 
 
 def query_savings(period: str) -> list[Session]:
@@ -225,21 +335,22 @@ def query_savings(period: str) -> list[Session]:
 
     period examples: '7d', '30d', '2026-05', 'all'
     """
+    finalize_expired_sessions()
     conn = _connect()
     now  = datetime.datetime.now()
 
     if period == "all":
-        rows = conn.execute("SELECT * FROM sessions ORDER BY session_date, start_time").fetchall()
+        rows = conn.execute(_SESSION_SELECT + " ORDER BY session_date, start_time").fetchall()
     elif period.endswith("d") and period[:-1].isdigit():
         days  = int(period[:-1])
         since = (now - datetime.timedelta(days=days)).isoformat()
         rows  = conn.execute(
-            "SELECT * FROM sessions WHERE ts >= ? ORDER BY session_date, start_time", (since,)
+            _SESSION_SELECT + " WHERE ts >= ? ORDER BY session_date, start_time", (since,)
         ).fetchall()
     elif len(period) == 7 and period[4] == "-":
         # YYYY-MM
         rows = conn.execute(
-            "SELECT * FROM sessions WHERE ts LIKE ? ORDER BY session_date, start_time",
+            _SESSION_SELECT + " WHERE ts LIKE ? ORDER BY session_date, start_time",
             (f"{period}%",)
         ).fetchall()
     else:
@@ -248,7 +359,7 @@ def query_savings(period: str) -> list[Session]:
         return []
 
     conn.close()
-    return [Session(*row[1:]) for row in rows]  # skip auto-id
+    return [Session(*row) for row in rows]
 
 
 def savings_summary(period: str) -> dict:
@@ -285,9 +396,15 @@ def print_report(period: str):
     for s in summary["sessions_detail"]:
         date = s.session_date or s.ts[:10]
         soc  = f"  SOC={s.soc_start:.0f}%" if s.soc_start is not None else ""
+        status = f"  {s.status}"
+        actual = ""
+        if s.actual_start_ts and s.actual_end_ts:
+            actual = (
+                f"  actual {s.actual_start_ts[11:16]}–{s.actual_end_ts[11:16]}"
+            )
         print(f"  {date}  w{s.window}  {s.start_time}–{s.end_time}"
               f"  {s.duration_min}min  {s.kwh:.2f}kWh"
-              f"  {s.saved_pln:.2f}zł{soc}")
+              f"  {s.saved_pln:.2f}zł{soc}{status}{actual}")
     print(f"{'═' * 52}\n")
 
 

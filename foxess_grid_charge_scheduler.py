@@ -223,6 +223,7 @@ def _apply(sn, now, ctx, strategy, plan: ChargePlan, radiation, weekend: bool) -
             changed = True
 
         _update_charge_state(now, plan)
+        _finalize_sessions_for_inactive_windows(now, plan, cur, already1, already2)
         _record_sessions_for_enabled_windows(now, plan, ctx.soc, ctx.winter,
                                              weekend, strategy.name)
 
@@ -275,6 +276,27 @@ def _update_charge_state(now: datetime.datetime, plan: ChargePlan):
         charge_state.clear_skip()
 
 
+def _time_on_date(now: datetime.datetime, hhmm: str) -> datetime.datetime:
+    h, m = map(int, hhmm.split(":"))
+    return now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def _finalize_sessions_for_inactive_windows(now: datetime.datetime, plan: ChargePlan,
+                                            cur: dict, already1: bool,
+                                            already2: bool) -> None:
+    """Close savings rows when a window is disabled or its configured end passed."""
+    for idx, window, already in ((1, plan.window1, already1), (2, plan.window2, already2)):
+        session_date = now.date().isoformat()
+
+        if window.enabled is False:
+            savings.finalize_session(idx, session_date, now)
+            continue
+
+        cur_end = _api_time(cur, f"endTime{idx}")
+        if already and windows.is_closed(now, cur_end):
+            savings.finalize_session(idx, session_date, _time_on_date(now, cur_end))
+
+
 def _record_sessions_for_enabled_windows(now: datetime.datetime, plan: "ChargePlan",
                                          soc: float | None, winter: bool,
                                          weekend: bool, strategy_name: str) -> None:
@@ -300,6 +322,7 @@ def _record_sessions_for_enabled_windows(now: datetime.datetime, plan: "ChargePl
                 idx, window.start, window.end, soc,
                 winter, strategy_name, weekend,
                 session_date=now.date().isoformat(),
+                observed_at=now,
             )
 
 

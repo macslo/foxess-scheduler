@@ -292,7 +292,9 @@ To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh 
 ## Savings tracking
 
 The scheduler records each grid charge session and estimates how much was saved
-vs paying the peak rate. Data is stored in `.savings.db` (SQLite, auto-created).
+vs paying the peak rate. New sessions are tracked as `open` when the scheduler
+first sees the window active, then `closed` when the window is disabled or its
+planned end time passes. Data is stored in `.savings.db` (SQLite, auto-created).
 
 ```bash
 # Last 30 days (default)
@@ -319,14 +321,16 @@ Each `--savings` run also sends a summary embed to Discord (if webhook is config
   kWh       : 22.14 kWh
   Saved     : 11.83 zł
 ────────────────────────────────────────────────────
-  2026-05-27  w1  06:56–07:00   4min  0.38kWh  0.29zł  SOC=10%
-  2026-05-27  w2  15:45–17:00  75min  7.04kWh  5.35zł  SOC=28%
-  2026-05-30  w2  14:20–15:00  40min  3.75kWh  0.78zł  SOC=60%
-  2026-05-31  w1  20:00–21:00  60min  5.63kWh  2.62zł  SOC=77%
+  2026-05-27  w1  06:56–07:00   4min  0.38kWh  0.29zł  SOC=10%  closed  actual 06:56–07:00
+  2026-05-27  w2  15:45–17:00  45min  4.22kWh  3.21zł  SOC=28%  closed  actual 15:45–16:30
+  2026-05-30  w2  14:20–15:00  40min  3.75kWh  0.78zł  SOC=60%  estimated
+  2026-05-31  w1  20:00–21:00  60min  5.63kWh  2.62zł  SOC=77%  closed  actual 20:00–21:00
 ════════════════════════════════════════════════════
 ```
 
-**Savings formula:** `duration_min / 60 × BATTERY_CHARGE_RATE_KW × (peak_rate − charge_rate)`
+**Savings formula:** `duration_min / 60 × BATTERY_CHARGE_RATE_KW × (peak_rate − charge_rate)`.
+For closed sessions, `duration_min` is the observed active time; older rows remain
+`estimated` and keep their original planned duration.
 
 Rates are taken from the full G13s tariff table — correct pair selected per season,
 day type and window slot. All rates overridable via `FOXESS_PRICE_*` env vars.
