@@ -150,9 +150,11 @@ class SummerWeekend(ChargeStrategy):
 
 class WinterWeekday(ChargeStrategy):
     name = "G13s WINTER weekday"
-    window1           = ("06:30", "07:00")
-    window1_low_solar = ("06:30", "07:00")
-    window2           = ("14:20", "15:00")
+    # Check from the first active run so dynamic charging can start at 06:00.
+    window1           = ("06:00", "07:00")
+    window1_low_solar = ("06:00", "07:00")
+    # Check from 13:00 even on clear days: a good forecast can still mean low SOC.
+    window2           = ("13:00", "15:00")
     window2_low_solar = ("13:00", "15:00")
 
     def enable1(self): return True

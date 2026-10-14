@@ -176,10 +176,11 @@ class TestStrategyWindowTimes(unittest.TestCase):
 
     def test_winter_weekday_window1_same_both(self):
         s = WinterWeekday()
-        self.assertEqual(s.get_window1(ctx(False)), s.get_window1(ctx(True)))
+        self.assertEqual(s.get_window1(ctx(False)), ("06:00", "07:00"))
+        self.assertEqual(s.get_window1(ctx(True)), ("06:00", "07:00"))
 
     def test_winter_weekday_window2_clear(self):
-        self.assertEqual(WinterWeekday().get_window2(ctx(False)), ("14:20", "15:00"))
+        self.assertEqual(WinterWeekday().get_window2(ctx(False)), ("13:00", "15:00"))
 
     def test_winter_weekday_window2_cloudy(self):
         self.assertEqual(WinterWeekday().get_window2(ctx(True)), ("13:00", "15:00"))
@@ -392,7 +393,11 @@ class TestDynamicWindowTimes(unittest.TestCase):
         with patch_hour(6):
             start, end = s.get_window1(c)
             self.assertEqual(end, "07:00")
-            self.assertNotEqual(start, "06:30")   # not static
+            self.assertGreater(start, "06:00")
+            self.assertLess(start, "07:00")
+            later_start, _ = s.get_window1(ctx(soc=30.0, pv_kw=0.1, winter=True))
+            self.assertGreater(later_start, start)
+            self.assertLess(later_start, "07:00")
 
     def test_window1_falls_back_when_soc_none(self):
         """No SOC data → static fallback for window 1."""

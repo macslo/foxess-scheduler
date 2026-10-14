@@ -57,7 +57,7 @@ Windows are **dynamic** — start time depends on solar forecast and (in `g13s_d
 | Summer weekday | 06:50–07:00 (10 min) | 06:45–07:00 (15 min) | 16:20–17:00 (40 min) | 15:30–17:00 (90 min) |
 | Summer weekend (Sat) | disabled | disabled | disabled by default | disabled by default |
 | Summer weekend (Sun) | **20:00–21:00** pre-Monday top-up | same | disabled by default | disabled by default |
-| Winter weekday | 06:30–07:00 (30 min) | 06:30–07:00 (same) | 14:20–15:00 (40 min) | 13:00–15:00 (120 min) |
+| Winter weekday | 06:00–07:00 (60 min) | 06:00–07:00 (same) | 13:00–15:00 (120 min) | 13:00–15:00 (120 min) |
 | Winter weekend | disabled | disabled | disabled by default | disabled by default |
 
 > **Sunday evening special:** window 1 slot (normally unused on weekends) is repurposed as a 20:00–21:00 charge window to reach 100% SOC before Monday. FoxESS stops charging automatically when full.
@@ -156,7 +156,7 @@ TARGET_SUMMER_WEEKDAY_MORNING = 15   # 1h peak, low usage
 TARGET_SUMMER_WEEKDAY_EVENING = 85   # goal: near-full before night
 TARGET_SUMMER_WEEKEND_MORNING = 10   # window disabled — FoxESS system minimum
 TARGET_SUMMER_WEEKEND_EVENING = 85
-TARGET_WINTER_WEEKDAY_MORNING = 65   # 3h peak
+TARGET_WINTER_WEEKDAY_MORNING = 45   # 3h peak; 55% with cloud bonus
 TARGET_WINTER_WEEKDAY_EVENING = 95   # 6h peak — worst block
 TARGET_WINTER_WEEKEND_MORNING = 35
 TARGET_WINTER_WEEKEND_EVENING = 85
@@ -280,7 +280,7 @@ Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, 
 | Summer weekday | 15% | 85% |
 | Summer weekend (Sat) | 10% (window disabled) | 85% |
 | Summer weekend (Sun) | 100% (pre-Monday top-up) | 85% |
-| Winter weekday | 65% | 95% |
+| Winter weekday | 45% (55% with cloud bonus) | 95% |
 | Winter weekend | 35% (no peak) | 85% |
 
 Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production. On cloudy days the target reaches 100% — FoxESS handles this safely and simply stops charging when full.
