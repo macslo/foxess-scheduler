@@ -310,6 +310,8 @@ python3 foxess_grid_charge_scheduler.py --savings=2026-05
 python3 foxess_grid_charge_scheduler.py --savings=all
 ```
 
+Both `--savings=3d` and `--savings 3d` are supported. Using `--savings` alone defaults to `30d`.
+
 Each `--savings` run also sends a summary embed to Discord (if webhook is configured).
 
 **Example output:**

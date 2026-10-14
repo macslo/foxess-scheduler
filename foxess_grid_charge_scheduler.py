@@ -7,6 +7,7 @@ optimised for the Tauron G13s time-of-use tariff (Poland).
 Runs via cron every 2 minutes but exits immediately unless near a charge
 window — no unnecessary API calls.
 """
+import argparse
 import datetime
 import os
 import sys
@@ -328,14 +329,18 @@ def _record_sessions_for_enabled_windows(now: datetime.datetime, plan: "ChargePl
 
 # ── Main ──────────────────────────────────────────────────────────────────────────
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--force", action="store_true", help="Force a scheduler run")
+    parser.add_argument("--savings", nargs="?", const="30d", metavar="PERIOD",
+                        help="Show savings for PERIOD (default: 30d)")
+    args = parser.parse_args()
     now   = datetime.datetime.now()
-    force = "--force" in sys.argv
+    force = args.force
     print(f"[RUN] {now.isoformat()}{' [FORCED]' if force else ''}")
 
     # ── Savings report mode — handle before any skip checks ─────────────────
-    savings_arg = next((a for a in sys.argv[1:] if a.startswith("--savings")), None)
-    if savings_arg:
-        period = savings_arg.split("=")[1] if "=" in savings_arg else "30d"
+    if args.savings is not None:
+        period = args.savings
         savings.print_report(period)
         from notifier import _send
         embed = savings.discord_report(period)

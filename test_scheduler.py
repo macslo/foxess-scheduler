@@ -33,6 +33,35 @@ from proximity import saved_window_relevant, window_in_progress, proximity_check
 from foxess_grid_charge_scheduler import _evaluate_windows
 
 
+class TestSavingsCLI(unittest.TestCase):
+
+    def test_report_period_reaches_console_and_discord_before_skip_checks(self):
+        for arguments, period in [
+            (["--savings", "3d"], "3d"),
+            (["--savings=3d"], "3d"),
+            (["--savings"], "30d"),
+            (["--savings", "--force"], "30d"),
+            (["--force", "--savings", "7d"], "7d"),
+            (["--savings", "2026-05"], "2026-05"),
+            (["--savings", "all"], "all"),
+        ]:
+            with self.subTest(arguments=arguments), \
+                 patch.object(sys, "argv", ["scheduler", *arguments]), \
+                 patch.object(_scheduler_module.savings, "print_report") as report, \
+                 patch.object(_scheduler_module.savings, "discord_report") as discord, \
+                 patch("notifier._send") as send, \
+                 patch.object(_scheduler_module, "_should_skip_early") as skip, \
+                 patch("builtins.print"):
+                discord.return_value = {"title": "Savings"}
+                with self.assertRaises(SystemExit) as exited:
+                    _scheduler_module.main()
+                self.assertEqual(exited.exception.code, 0)
+                report.assert_called_once_with(period)
+                discord.assert_called_once_with(period)
+                send.assert_called_once_with(discord.return_value)
+                skip.assert_not_called()
+
+
 class patch_hour:
     """Context manager to mock datetime.datetime.now().hour in strategies."""
     def __init__(self, hour):
