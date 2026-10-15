@@ -170,7 +170,7 @@ CLOUD_BONUS_EVENING = 15
 # Dynamic strategy parameters (g13s_dynamic only)
 BATTERY_KWH            = 9.4    # usable battery capacity
 BATTERY_CHARGE_RATE_KW = 5.63   # net rate to battery (grid rate minus house load)
-CHARGE_SAFETY_MARGIN   = 1.15   # +15% margin on calculated charge time
+CHARGE_SAFETY_MARGIN   = 1.0    # no extra margin on calculated charge time
 ```
 
 All `config.py` values can be overridden in `.env` using the `FOXESS_` prefix.

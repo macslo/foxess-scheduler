@@ -25,7 +25,7 @@ WINDOW_LEAD_MINUTES = int(os.getenv("FOXESS_WINDOW_LEAD_MINUTES", "3"))
 # CHARGE_SAFETY_MARGIN:   multiplier added to calculated time (e.g. 1.15 = +15%)
 BATTERY_KWH           = float(os.getenv("FOXESS_BATTERY_KWH",           "9.4"))
 BATTERY_CHARGE_RATE_KW= float(os.getenv("FOXESS_BATTERY_CHARGE_RATE_KW","5.63"))
-CHARGE_SAFETY_MARGIN  = float(os.getenv("FOXESS_CHARGE_SAFETY_MARGIN",  "1.15"))
+CHARGE_SAFETY_MARGIN  = float(os.getenv("FOXESS_CHARGE_SAFETY_MARGIN",  "1.0"))
 
 # ── Tariff mode ───────────────────────────────────────────────────────────────
 # Controls which charging strategy is used.
