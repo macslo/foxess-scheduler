@@ -283,6 +283,13 @@ Default targets are calculated for a **9.4 kWh battery**, **~2000W peak draw**, 
 | Winter weekday | 45% (55% with cloud bonus) | 95% |
 | Winter weekend | 35% (no peak) | 85% |
 
+Keep the winter weekday morning target at **45% (55% with poor solar)**:
+SOC usually falls to 10% overnight, and night charging is cheaper than midday
+charging. One sunny day showed 50% at 10:14 and 100% at 13:23 with little
+export, suggesting limited benefit from extra solar headroom that day.
+Consider 35% only if measurements confirm enough reserve for 07:00–10:00
+and regular solar surplus when the battery is full.
+
 Evening targets are high because the goal is to be **near-full by 21:00** — the current SOC at check time already reflects the day's solar production. On cloudy days the target reaches 100% — FoxESS handles this safely and simply stops charging when full.
 
 To adapt to your battery: `target% = (peak_hours × net_draw_kW) / (battery_kWh × usable_fraction / 100)`
